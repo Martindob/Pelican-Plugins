@@ -13,7 +13,9 @@ use Filament\Actions\Action;
 use Filament\Facades\Filament;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Filament\Resources\Concerns\HasTabs;
 use Filament\Schemas\Components\EmbeddedTable;
+use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Schema;
 use Filament\Support\Facades\FilamentView;
 use Filament\Tables\Columns\ImageColumn;
@@ -23,10 +25,12 @@ use Filament\Tables\Concerns\InteractsWithTable;
 use Filament\Tables\Contracts\HasTable;
 use Filament\Tables\Table;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Livewire\Attributes\Url;
 
 class PlayersPage extends Page implements HasTable
 {
     use BlockAccessInConflict;
+    use HasTabs;
     use InteractsWithTable;
 
     protected static string|\BackedEnum|null $navigationIcon = 'tabler-users-group';
@@ -34,6 +38,20 @@ class PlayersPage extends Page implements HasTable
     protected static ?string $slug = 'players';
 
     protected static ?int $navigationSort = 30;
+
+    #[Url(as: 'tab')]
+    public ?string $activeTab = null;
+
+    public bool $isMinecraft = false;
+
+    /** @var array<string, mixed> */
+    public array $players = [];
+
+    /** @var string[] */
+    public array $whitelist = [];
+
+    /** @var string[] */
+    public array $ops = [];
 
     public static function canAccess(): bool
     {
@@ -72,10 +90,14 @@ class PlayersPage extends Page implements HasTable
         return static::getNavigationLabel();
     }
 
-    /**
-     * @throws Exception
-     */
-    public function table(Table $table): Table
+    public function mount(): void
+    {
+        $this->loadPlayersData();
+
+        $this->loadDefaultActiveTab();
+    }
+
+    protected function loadPlayersData(): void
     {
         /** @var Server $server */
         $server = Filament::getTenant();
@@ -83,46 +105,52 @@ class PlayersPage extends Page implements HasTable
         /** @var ?GameQuery $gameQuery */
         $gameQuery = $server->egg->gameQuery; // @phpstan-ignore property.notFound
 
-        $isMinecraft = $gameQuery?->query_type === 'minecraft_java';
+        $this->isMinecraft = $gameQuery?->query_type === 'minecraft_java';
 
-        $whitelist = [];
-        $ops = [];
+        $this->whitelist = [];
+        $this->ops = [];
 
-        if ($isMinecraft) {
+        if ($this->isMinecraft) {
             $fileRepository = (new DaemonFileRepository())->setServer($server);
 
             try {
                 $whitelist = json_decode($fileRepository->getContent('whitelist.json'), true, 512, JSON_THROW_ON_ERROR);
-                $whitelist = array_unique(array_map(fn ($data) => $data['name'], $whitelist));
+                $this->whitelist = array_unique(array_map(fn ($data) => $data['name'], $whitelist));
             } catch (Exception $exception) {
                 report($exception);
             }
 
             try {
                 $ops = json_decode($fileRepository->getContent('ops.json'), true, 512, JSON_THROW_ON_ERROR);
-                $ops = array_unique(array_map(fn ($data) => $data['name'], $ops));
+                $this->ops = array_unique(array_map(fn ($data) => $data['name'], $ops));
             } catch (Exception $exception) {
                 report($exception);
             }
         }
 
+        $this->players = [];
+
+        if ($gameQuery) {
+            $data = $gameQuery->runQuery($server);
+
+            if ($data) {
+                $this->players = $data['players'] ?? [];
+            }
+        }
+    }
+
+    /**
+     * @throws Exception
+     */
+    public function table(Table $table): Table
+    {
         return $table
             ->records(function (?string $search, int $page, int $recordsPerPage) {
-                /** @var Server $server */
-                $server = Filament::getTenant();
-
-                $players = [];
-
-                /** @var ?GameQuery $gameQuery */
-                $gameQuery = $server->egg->gameQuery; // @phpstan-ignore property.notFound
-
-                if ($gameQuery) {
-                    $data = $gameQuery->runQuery($server);
-
-                    if ($data) {
-                        $players = $data['players'] ?? [];
-                    }
-                }
+                $players = match ($this->activeTab) {
+                    'whitelist' => array_map(fn ($player) => ['name' => $player], $this->whitelist),
+                    'ops' => array_map(fn ($player) => ['name' => $player], $this->ops),
+                    default => $this->players,
+                };
 
                 if ($search) {
                     $players = array_filter($players, fn ($player) => str($player['name'])->contains($search, true));
@@ -134,30 +162,30 @@ class PlayersPage extends Page implements HasTable
             ->contentGrid([
                 'default' => 1,
                 'lg' => 2,
-                'xl' => $isMinecraft ? 2 : 3,
+                'xl' => $this->isMinecraft ? 2 : 3,
             ])
             ->columns([
                 Split::make([
                     ImageColumn::make('avatar')
-                        ->visible(fn () => $isMinecraft)
-                        ->state(fn (array $record) => 'https://cravatar.eu/helmhead/' . $record['id'] . '/256.png')
+                        ->visible(fn () => $this->isMinecraft)
+                        ->state(fn (array $record) => 'https://cravatar.eu/helmhead/' . (array_key_exists('id', $record) ? $record['id'] : $record['name']) . '/256.png')
                         ->grow(false),
                     TextColumn::make('name')
                         ->label('Name')
                         ->tooltip(fn (array $record) => array_key_exists('id', $record) ? $record['id'] : null)
                         ->searchable(),
                     TextColumn::make('is_whitelisted')
-                        ->visible(fn () => $isMinecraft)
+                        ->visible(fn () => $this->isMinecraft)
                         ->badge()
                         ->grow(false)
-                        ->state(fn (array $record) => in_array($record['name'], $whitelist) ? trans('player-counter::query.whitelisted') : null),
+                        ->state(fn (array $record) => in_array($record['name'], $this->whitelist) ? trans('player-counter::query.whitelisted') : null),
                     TextColumn::make('is_op')
-                        ->visible(fn () => $isMinecraft)
+                        ->visible(fn () => $this->isMinecraft)
                         ->badge()
                         ->grow(false)
-                        ->state(fn (array $record) => in_array($record['name'], $ops) ? trans('player-counter::query.op') : null),
+                        ->state(fn (array $record) => in_array($record['name'], $this->ops) ? trans('player-counter::query.op') : null),
                     TextColumn::make('time')
-                        ->hidden(fn () => $isMinecraft)
+                        ->hidden(fn () => $this->isMinecraft)
                         ->badge()
                         ->grow(false)
                         ->formatStateUsing(fn ($state) => $state ? CarbonInterval::seconds($state)->cascade()->forHumans() : null),
@@ -165,7 +193,7 @@ class PlayersPage extends Page implements HasTable
             ])
             ->recordActions([
                 Action::make('exclude_kick')
-                    ->visible(fn () => $isMinecraft)
+                    ->visible(fn () => !$this->activeTab || $this->activeTab === 'online')
                     ->label(trans('player-counter::query.kick'))
                     ->icon('tabler-door-exit')
                     ->color('danger')
@@ -194,7 +222,7 @@ class PlayersPage extends Page implements HasTable
                         }
                     }),
                 Action::make('exclude_ban')
-                    ->visible(fn () => $isMinecraft)
+                    ->visible(fn () => !$this->activeTab || $this->activeTab === 'online')
                     ->label(trans('player-counter::query.ban'))
                     ->icon('tabler-hammer')
                     ->color('danger')
@@ -224,16 +252,16 @@ class PlayersPage extends Page implements HasTable
                         }
                     }),
                 Action::make('exclude_whitelist')
-                    ->visible(fn () => $isMinecraft)
-                    ->label(fn (array $record) => in_array($record['name'], $whitelist) ? trans('player-counter::query.remove_from_whitelist') : trans('player-counter::query.add_to_whitelist'))
-                    ->icon(fn (array $record) => in_array($record['name'], $whitelist) ? 'tabler-playlist-x' : 'tabler-playlist-add')
-                    ->color(fn (array $record) => in_array($record['name'], $whitelist) ? 'danger' : 'success')
-                    ->action(function (array $record) use ($whitelist) {
+                    ->visible(fn () => $this->isMinecraft)
+                    ->label(fn (array $record) => in_array($record['name'], $this->whitelist) ? trans('player-counter::query.remove_from_whitelist') : trans('player-counter::query.add_to_whitelist'))
+                    ->icon(fn (array $record) => in_array($record['name'], $this->whitelist) ? 'tabler-playlist-x' : 'tabler-playlist-add')
+                    ->color(fn (array $record) => in_array($record['name'], $this->whitelist) ? 'danger' : 'success')
+                    ->action(function (array $record) {
                         /** @var Server $server */
                         $server = Filament::getTenant();
 
                         try {
-                            $action = in_array($record['name'], $whitelist) ? 'remove' : 'add';
+                            $action = in_array($record['name'], $this->whitelist) ? 'remove' : 'add';
 
                             $server->send('whitelist ' . $action . ' ' . $record['name']);
 
@@ -255,16 +283,16 @@ class PlayersPage extends Page implements HasTable
                         }
                     }),
                 Action::make('exclude_op')
-                    ->visible(fn () => $isMinecraft)
-                    ->label(fn (array $record) => in_array($record['name'], $ops) ? trans('player-counter::query.remove_from_ops') : trans('player-counter::query.add_to_ops'))
-                    ->icon(fn (array $record) => in_array($record['name'], $ops) ? 'tabler-shield-minus' : 'tabler-shield-plus')
-                    ->color(fn (array $record) => in_array($record['name'], $ops) ? 'warning' : 'success')
-                    ->action(function (array $record) use ($ops) {
+                    ->visible(fn () => $this->isMinecraft)
+                    ->label(fn (array $record) => in_array($record['name'], $this->ops) ? trans('player-counter::query.remove_from_ops') : trans('player-counter::query.add_to_ops'))
+                    ->icon(fn (array $record) => in_array($record['name'], $this->ops) ? 'tabler-shield-minus' : 'tabler-shield-plus')
+                    ->color(fn (array $record) => in_array($record['name'], $this->ops) ? 'warning' : 'success')
+                    ->action(function (array $record) {
                         /** @var Server $server */
                         $server = Filament::getTenant();
 
                         try {
-                            $action = in_array($record['name'], $ops) ? 'deop' : 'op';
+                            $action = in_array($record['name'], $this->ops) ? 'deop' : 'op';
 
                             $server->send($action  . ' ' . $record['name']);
 
@@ -287,6 +315,10 @@ class PlayersPage extends Page implements HasTable
                     }),
             ])
             ->emptyStateHeading(function () {
+                if ($this->activeTab && $this->activeTab !== 'online') {
+                    return trans('player-counter::query.table.no_players');
+                }
+
                 /** @var Server $server */
                 $server = Filament::getTenant();
 
@@ -297,6 +329,10 @@ class PlayersPage extends Page implements HasTable
                 return trans('player-counter::query.table.no_players');
             })
             ->emptyStateDescription(function () {
+                if ($this->activeTab && $this->activeTab !== 'online') {
+                    return null;
+                }
+
                 /** @var Server $server */
                 $server = Filament::getTenant();
 
@@ -308,10 +344,32 @@ class PlayersPage extends Page implements HasTable
             });
     }
 
+    public function getTabs(): array
+    {
+        if (!$this->isMinecraft) {
+            return [];
+        }
+
+        return [
+            'online' => Tab::make('online')
+                ->label('Online')
+                ->badge(fn () => count($this->players)),
+
+            'whitelist' => Tab::make('whitelist')
+                ->label('Whitelist')
+                ->badge(fn () => count($this->whitelist)),
+
+            'ops' => Tab::make('ops')
+                ->label('OPs')
+                ->badge(fn () => count($this->ops)),
+        ];
+    }
+
     public function content(Schema $schema): Schema
     {
         return $schema
             ->components([
+                $this->getTabsContentComponent(),
                 EmbeddedTable::make(),
             ]);
     }
