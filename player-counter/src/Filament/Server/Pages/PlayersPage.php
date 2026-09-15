@@ -344,6 +344,7 @@ class PlayersPage extends Page implements HasTable
             });
     }
 
+    /** @return array<string|int, Tab> */
     public function getTabs(): array
     {
         if (!$this->isMinecraft) {
