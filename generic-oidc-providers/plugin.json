@@ -11,6 +11,7 @@
     "class": "GenericOIDCProvidersPlugin",
     "panels": null,
     "panel_version": null,
+    "api_version": 1,
     "composer_packages": {
         "kovah/laravel-socialite-oidc": "^0.8"
     }

@@ -11,6 +11,7 @@
     "class": "BillingPlugin",
     "panels": null,
     "panel_version": null,
+    "api_version": 0,
     "composer_packages": {
         "stripe/stripe-php": "^20.1"
     }
