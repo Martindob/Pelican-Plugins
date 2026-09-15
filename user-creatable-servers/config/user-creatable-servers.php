@@ -4,6 +4,7 @@ return [
     'database_limit' => (int) env('UCS_DEFAULT_DATABASE_LIMIT', 0),
     'allocation_limit' => (int) env('UCS_DEFAULT_ALLOCATION_LIMIT', 0),
     'backup_limit' => (int) env('UCS_DEFAULT_BACKUP_LIMIT', 0),
+    'subdomain_limit' => (int) env('UCS_DEFAULT_SUBDOMAIN_LIMIT', 0),
 
     'can_users_update_servers' => (bool) env('UCS_CAN_USERS_UPDATE_SERVERS', true),
     'can_users_delete_servers' => (bool) env('UCS_CAN_USERS_DELETE_SERVERS', false),

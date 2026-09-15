@@ -3,7 +3,9 @@
 namespace Boy132\UserCreatableServers;
 
 use App\Contracts\Plugins\HasPluginSettings;
+use App\Enums\PluginStatus;
 use App\Models\Egg;
+use App\Models\Plugin as PluginModel;
 use App\Traits\EnvironmentWriterTrait;
 use Filament\Contracts\Plugin;
 use Filament\Forms\Components\Select;
@@ -49,7 +51,7 @@ class UserCreatableServersPlugin implements HasPluginSettings, Plugin
     {
         return [
             Section::make('Limits')
-                ->columns(3)
+                ->columns(fn () => $this->hasSubdomainsPlugin() ? 4 : 3)
                 ->schema([
                     TextInput::make('database_limit')
                         ->label('Default database limit')
@@ -69,6 +71,13 @@ class UserCreatableServersPlugin implements HasPluginSettings, Plugin
                         ->numeric()
                         ->minValue(0)
                         ->default(fn () => config('user-creatable-servers.backup_limit')),
+                    TextInput::make('subdomain_limit')
+                        ->label('Default subdomain limit')
+                        ->visible(fn () => $this->hasSubdomainsPlugin())
+                        ->required()
+                        ->numeric()
+                        ->minValue(0)
+                        ->default(fn () => config('user-creatable-servers.subdomain_limit')),
                 ]),
             Section::make('User Settings')
                 ->columns()
@@ -119,6 +128,7 @@ class UserCreatableServersPlugin implements HasPluginSettings, Plugin
             'UCS_DEFAULT_DATABASE_LIMIT' => $data['database_limit'],
             'UCS_DEFAULT_ALLOCATION_LIMIT' => $data['allocation_limit'],
             'UCS_DEFAULT_BACKUP_LIMIT' => $data['backup_limit'],
+            'UCS_DEFAULT_SUBDOMAIN_LIMIT' => $data['subdomain_limit'],
             'UCS_CAN_USERS_UPDATE_SERVERS' => $data['can_users_update_servers'] ? 'true' : 'false',
             'UCS_CAN_USERS_DELETE_SERVERS' => $data['can_users_delete_servers'] ? 'true' : 'false',
             'UCS_DEPLOYMENT_TAGS' => implode(',', $data['deployment_tags']),
@@ -130,5 +140,13 @@ class UserCreatableServersPlugin implements HasPluginSettings, Plugin
             ->title('Settings saved')
             ->success()
             ->send();
+    }
+
+    public function hasSubdomainsPlugin(): bool
+    {
+        /** @var ?PluginModel $subdomains */
+        $subdomains = PluginModel::find('subdomains');
+
+        return $subdomains && $subdomains->status === PluginStatus::Enabled;
     }
 }

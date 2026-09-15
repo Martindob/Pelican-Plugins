@@ -8,6 +8,7 @@ use App\Models\Server;
 use App\Models\User;
 use App\Services\Servers\ServerCreationService;
 use Carbon\Carbon;
+use Exception;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -151,7 +152,16 @@ class UserResourceLimits extends Model
             /** @var ServerCreationService $service */
             $service = app(ServerCreationService::class);
 
-            return $service->handle($data, $object);
+            $server = $service->handle($data, $object);
+
+            try {
+                $server->forceFill([
+                    'subdomain_limit' => config('user-creatable-servers.subdomain_limit'),
+                ])->save();
+            } catch (Exception) {
+            }
+
+            return $server;
         }
 
         return false;
