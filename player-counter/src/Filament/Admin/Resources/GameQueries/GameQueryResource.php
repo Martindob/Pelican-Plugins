@@ -16,6 +16,7 @@ use Filament\Resources\Resource;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class GameQueryResource extends Resource
 {
@@ -108,7 +109,8 @@ class GameQueryResource extends Resource
                     ->hintIconTooltip(trans('player-counter::query.port_variable_hint')),
                 Select::make('eggs')
                     ->label(trans('admin/mount.eggs'))
-                    ->relationship('eggs', 'name')
+                    // Selecting only non-json fields to prevent Postgres from choking on DISTINCT JSON columns
+                    ->relationship('eggs', 'name', fn (Builder $query) => $query->select(['eggs.id', 'eggs.name']))
                     ->multiple()
                     ->preload()
                     ->searchable()
