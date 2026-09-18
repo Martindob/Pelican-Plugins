@@ -44,8 +44,9 @@ class CitizenFXQueryTypeSchema implements QueryTypeSchemaInterface
                 'max_players' => $info['sv_maxclients'],
                 'players' => array_map(fn ($player) => ['id' => (string) $player['id'], 'name' => (string) $player['name']], $players),
             ];
-        } catch (Exception $exception) {
-            report($exception);
+        } catch (Exception) {
+            // Not reported: a failed query almost always just means the server is offline,
+            // starting or otherwise unreachable, not an application error.
         }
 
         return null;
