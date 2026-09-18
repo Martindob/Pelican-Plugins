@@ -8,6 +8,7 @@ use Exception;
 use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 
 class PaperVelocityUpdateService
@@ -36,7 +37,11 @@ class PaperVelocityUpdateService
         }
 
         try {
-            $this->update($server);
+            // Guards against two power actions (e.g. a double restart click) racing to
+            // download and write the same jar file at once. If the lock is already held,
+            // this restart simply skips the check and boots whatever is currently on
+            // disk instead of risking two interleaved writes to the same file.
+            Cache::lock("paper-velocity-updater:server:{$server->id}", 120)->get(fn () => $this->update($server));
         } catch (Exception $exception) {
             report($exception);
         }
