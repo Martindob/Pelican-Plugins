@@ -210,6 +210,16 @@ class MinecraftModrinthService
     }
 
     /**
+     * Cache keys below only vary by loader/version/project, so without this, flipping the
+     * "Always Use Latest Version" setting would keep serving whatever was cached under the
+     * same key before the flip for up to its TTL, since the setting itself isn't part of it.
+     */
+    protected function versionFilterCacheSuffix(string $loader): string
+    {
+        return $this->shouldFilterByMinecraftVersion($loader) ? 'exact' : 'latest';
+    }
+
+    /**
      * Modrinth's own "project_type" field (mod/plugin/resourcepack/...) is whatever the
      * author picked when they first created the project; a Bukkit-family project can be
      * stored as "mod" even though it only has paper/spigot/purpur versions and Modrinth's
@@ -252,7 +262,7 @@ class MinecraftModrinthService
             'facets' => '['.implode(',', $facetGroups).']',
         ];
 
-        $key = "modrinth_projects:{$modrinthProjectType}:$minecraftVersion:$minecraftLoader:$page";
+        $key = "modrinth_projects:{$modrinthProjectType}:$minecraftVersion:$minecraftLoader:".$this->versionFilterCacheSuffix($minecraftLoader).":$page";
 
         if ($search) {
             $data['query'] = $search;
@@ -384,7 +394,7 @@ class MinecraftModrinthService
 
     protected function getVersionsCacheKey(string $projectId, ?string $minecraftVersion, string $minecraftLoader): string
     {
-        return "modrinth_versions:$projectId:$minecraftVersion:$minecraftLoader";
+        return "modrinth_versions:$projectId:$minecraftVersion:$minecraftLoader:".$this->versionFilterCacheSuffix($minecraftLoader);
     }
 
     /** @return array{game_versions?: string, loaders: string} */
