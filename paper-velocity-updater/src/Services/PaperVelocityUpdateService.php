@@ -43,7 +43,11 @@ class PaperVelocityUpdateService
             // disk instead of risking two interleaved writes to the same file.
             Cache::lock("paper-velocity-updater:server:{$server->id}", 120)->get(fn () => $this->update($server));
         } catch (Exception $exception) {
-            report($exception);
+            // Someone restarting a server repeatedly (e.g. while still configuring it)
+            // would otherwise log the same daemon/network failure on every single
+            // restart. One log entry per server/error per window is enough to notice
+            // a real, persistent problem without spamming the log.
+            $this->reportOncePerWindow("server:{$server->id}:" . $exception::class, $exception);
         }
     }
 
@@ -93,7 +97,7 @@ class PaperVelocityUpdateService
 
         $fileRepository = app(DaemonFileRepository::class)->setServer($server);
 
-        $state = $this->readState($fileRepository);
+        $state = $this->readState($fileRepository, $server->id);
         $upToDate = $state !== null
             && ($state['project'] ?? null) === $project
             && ($state['version'] ?? null) === $version
@@ -177,7 +181,7 @@ class PaperVelocityUpdateService
 
                     return is_array($versions) ? $versions : [];
                 } catch (Exception $exception) {
-                    report($exception);
+                    $this->reportOncePerWindow("versions:$project", $exception);
 
                     return [];
                 }
@@ -222,7 +226,7 @@ class PaperVelocityUpdateService
                 try {
                     $builds = $this->http()->get("/projects/$project/versions/$version/builds")->json();
                 } catch (Exception $exception) {
-                    report($exception);
+                    $this->reportOncePerWindow("build:$project:$version", $exception);
 
                     return null;
                 }
@@ -250,6 +254,20 @@ class PaperVelocityUpdateService
         return (int) config('paper-velocity-updater.cache_minutes', 15);
     }
 
+    /**
+     * Reports an exception at most once per $key within the configured throttle
+     * window, so a persistent problem (daemon unreachable, bad credentials, ...)
+     * isn't logged again on every single restart of the affected server.
+     */
+    private function reportOncePerWindow(string $key, Exception $exception): void
+    {
+        $minutes = (int) config('paper-velocity-updater.report_throttle_minutes', 30);
+
+        if ($minutes <= 0 || Cache::add("paper-velocity-updater:reported:$key", true, now()->addMinutes($minutes))) {
+            report($exception);
+        }
+    }
+
     private function http(): PendingRequest
     {
         return Http::baseUrl(self::FILL_BASE_URL)
@@ -260,7 +278,7 @@ class PaperVelocityUpdateService
     }
 
     /** @return array{project?: string, version?: string, build?: int, jar?: string}|null */
-    private function readState(DaemonFileRepository $fileRepository): ?array
+    private function readState(DaemonFileRepository $fileRepository, int $serverId): ?array
     {
         try {
             $content = $fileRepository->getContent(self::STATE_FILE);
@@ -268,7 +286,7 @@ class PaperVelocityUpdateService
             // No marker yet - first check for this server.
             return null;
         } catch (Exception $exception) {
-            report($exception);
+            $this->reportOncePerWindow("server:$serverId:read-state", $exception);
 
             return null;
         }
