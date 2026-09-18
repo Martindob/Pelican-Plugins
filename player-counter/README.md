@@ -14,7 +14,9 @@ Minecraft servers will first try the query (which requires you to set `enable-qu
 
 ### Minecraft Proxy (Velocity/BungeeCord/Waterfall)
 
-Use the `Minecraft (Proxy)` query type when the server you are querying is actually a Velocity, BungeeCord or Waterfall proxy sitting in front of one or more backend servers, instead of a standalone Minecraft server. All three proxies speak the same Java Edition status/ping protocol as a vanilla server, so the query works the same way and returns the aggregated player count/list across all backend servers behind the proxy.
+Use the `Minecraft (Proxy)` query type when the server you are querying is actually a Velocity, BungeeCord or Waterfall proxy sitting in front of one or more backend servers, instead of a standalone Minecraft server. All three proxies speak the same Java Edition status/ping protocol as a vanilla server, so this query type returns the aggregated player count/list across all backend servers behind the proxy.
+
+Unlike the `Minecraft (Java)` type, this always uses the ping/status protocol only and never attempts the legacy `enable-query`/`query-port` query, since proxy software does not support that legacy query protocol reliably (it caused connection errors during testing). No proxy-side query configuration is needed.
 
 Since a proxy has no `whitelist.json`, `ops.json` or player data files of its own, the whitelist, OP list and player avatar features on the players page are disabled for this query type. Whitelist/OP management still works normally when applied directly to the backend servers using the regular `Minecraft (Java)` query type.
 
