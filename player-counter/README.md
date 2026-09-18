@@ -18,7 +18,7 @@ Use the `Minecraft (Proxy)` query type when the server you are querying is actua
 
 Unlike the `Minecraft (Java)` type, this always uses the ping/status protocol only and never attempts the legacy `enable-query`/`query-port` query, since proxy software does not support that legacy query protocol reliably (it caused connection errors during testing). No proxy-side query configuration is needed.
 
-Since a proxy has no `whitelist.json`, `ops.json` or player data files of its own, the whitelist, OP list and player avatar features on the players page are disabled for this query type. Whitelist/OP management still works normally when applied directly to the backend servers using the regular `Minecraft (Java)` query type.
+Since a proxy has no `whitelist.json`, `ops.json` or player data files of its own, the whitelist, OP list and player avatar features on the players page are disabled for this query type. Kick and ban are disabled too, since stock Velocity/BungeeCord/Waterfall don't provide those console commands out of the box. Whitelist/OP/kick/ban management still works normally when applied directly to the backend servers using the regular `Minecraft (Java)` query type.
 
 ### Palworld
 
