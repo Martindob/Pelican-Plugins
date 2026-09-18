@@ -83,12 +83,10 @@ class PlayerCounterSeeder extends Seeder
             'query_port_offset' => null,
             'query_port_variable' => null,
         ],
-        [
-            'tag' => 'minecraft',
-            'query_type' => 'minecraft_java',
-            'query_port_offset' => null,
-            'query_port_variable' => null,
-        ],
+        // Proxy mappings must come before the generic 'minecraft' tag mapping below: an egg
+        // can carry both tags (e.g. a Velocity egg also tagged 'minecraft'), and only the
+        // first match in this list is applied per egg, so the more specific proxy mapping
+        // has to win the tie instead of being shadowed by the generic Java one.
         [
             'names' => 'Velocity',
             'tag' => 'velocity',
@@ -111,6 +109,12 @@ class PlayerCounterSeeder extends Seeder
             'query_port_variable' => null,
         ],
         [
+            'tag' => 'minecraft',
+            'query_type' => 'minecraft_java',
+            'query_port_offset' => null,
+            'query_port_variable' => null,
+        ],
+        [
             'tag' => 'source',
             'query_type' => 'source',
             'query_port_offset' => null,
@@ -123,23 +127,50 @@ class PlayerCounterSeeder extends Seeder
         foreach (Egg::all() as $egg) {
             $tags = $egg->tags ?? [];
 
-            foreach (self::MAPPINGS as $mapping) {
-                if ((array_key_exists('names', $mapping) && in_array($egg->name, array_wrap($mapping['names']))) || (array_key_exists('tag', $mapping) && in_array($mapping['tag'], $tags))) {
-                    try {
-                        $query = GameQuery::firstOrCreate([
-                            'query_type' => $mapping['query_type'],
-                            'query_port_offset' => $mapping['query_port_offset'],
-                            'query_port_variable' => $mapping['query_port_variable'],
-                        ]);
+            // Only the first (highest-priority) match in MAPPINGS applies per egg: an egg can
+            // match more than one mapping (e.g. a Velocity egg also tagged 'minecraft'), and
+            // MAPPINGS is ordered so the more specific one wins that tie.
+            $mapping = null;
+            foreach (self::MAPPINGS as $candidate) {
+                if ((array_key_exists('names', $candidate) && in_array($egg->name, array_wrap($candidate['names']))) || (array_key_exists('tag', $candidate) && in_array($candidate['tag'], $tags))) {
+                    $mapping = $candidate;
 
-                        EggGameQuery::firstOrCreate([
-                            'egg_id' => $egg->id,
-                        ], [
-                            'game_query_id' => $query->id,
-                        ]);
-                    } catch (Exception) {
-                    }
+                    break;
                 }
+            }
+
+            if (!$mapping) {
+                continue;
+            }
+
+            try {
+                $query = GameQuery::firstOrCreate([
+                    'query_type' => $mapping['query_type'],
+                    'query_port_offset' => $mapping['query_port_offset'],
+                    'query_port_variable' => $mapping['query_port_variable'],
+                ]);
+
+                /** @var ?EggGameQuery $existing */
+                $existing = EggGameQuery::where('egg_id', $egg->id)->first();
+
+                if ($existing) {
+                    // Correct the one known bad state an older version of this seeder could
+                    // produce: a proxy egg (also tagged 'minecraft') mis-assigned minecraft_java
+                    // because the generic mapping used to be checked before the proxy ones.
+                    // Any other existing association is left alone, so manual admin changes
+                    // to unrelated eggs survive a re-run of this seeder.
+                    if ($mapping['query_type'] === 'minecraft_proxy' && GameQuery::find($existing->game_query_id)?->query_type === 'minecraft_java') {
+                        $existing->update(['game_query_id' => $query->id]);
+                    }
+
+                    continue;
+                }
+
+                EggGameQuery::create([
+                    'egg_id' => $egg->id,
+                    'game_query_id' => $query->id,
+                ]);
+            } catch (Exception) {
             }
         }
 
