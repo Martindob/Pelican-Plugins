@@ -23,7 +23,10 @@ A server without any of these variables is left untouched.
 2. If `BUILD_NUMBER` is pinned to a specific number (not `latest`), the server is left alone -
    the admin explicitly chose that build.
 3. Otherwise, the plugin resolves the target Minecraft/Velocity version (or the newest one, if
-   `latest` or invalid) and asks PaperMC for the newest `STABLE` build for it.
+   `latest` or invalid) and asks PaperMC for the newest `STABLE` build for it. **The version and
+   build are resolved independently**: pinning `MINECRAFT_VERSION` to e.g. `26.2` with
+   `BUILD_NUMBER` left at `latest` keeps the server on new `26.2` builds forever - it never jumps
+   to `26.3` just because that becomes the newest version.
 4. If that build differs from the one last installed (tracked in a small `.paper-velocity-updater.json`
    marker file in the server's root), the jar is downloaded straight into the server directory
    (via the daemon's file-pull API) and the marker is updated - all before the power signal is
