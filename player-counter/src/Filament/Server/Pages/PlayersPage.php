@@ -44,6 +44,8 @@ class PlayersPage extends Page implements HasTable
 
     public bool $isMinecraft = false;
 
+    public bool $isProxy = false;
+
     /** @var array<string, mixed> */
     public array $players = [];
 
@@ -106,6 +108,7 @@ class PlayersPage extends Page implements HasTable
         $gameQuery = $server->egg->gameQuery; // @phpstan-ignore property.notFound
 
         $this->isMinecraft = $gameQuery?->query_type === 'minecraft_java';
+        $this->isProxy = $gameQuery?->query_type === 'minecraft_proxy';
 
         $this->whitelist = [];
         $this->ops = [];
@@ -185,7 +188,7 @@ class PlayersPage extends Page implements HasTable
                         ->grow(false)
                         ->state(fn (array $record) => in_array($record['name'], $this->ops) ? trans('player-counter::query.op') : null),
                     TextColumn::make('time')
-                        ->hidden(fn () => $this->isMinecraft)
+                        ->hidden(fn () => $this->isMinecraft || $this->isProxy)
                         ->badge()
                         ->grow(false)
                         ->formatStateUsing(fn ($state) => $state ? CarbonInterval::seconds($state)->cascade()->forHumans() : null),
