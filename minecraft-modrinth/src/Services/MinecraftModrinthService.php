@@ -25,13 +25,7 @@ class MinecraftModrinthService
 
     public function getMinecraftVersion(Server $server): ?string
     {
-        $version = $server->variables()->where(fn ($builder) => $builder->where('env_variable', 'MINECRAFT_VERSION')->orWhere('env_variable', 'MC_VERSION'))->first()?->server_value;
-
-        if (!$version || $version === 'latest') {
-            return $this->getLatestMinecraftVersion();
-        }
-
-        return $version;
+        return $this->getConfiguredMinecraftVersion($server) ?? $this->getLatestMinecraftVersion();
     }
 
     public function getLatestMinecraftVersion(): ?string
@@ -53,6 +47,71 @@ class MinecraftModrinthService
                 return null;
             }
         });
+    }
+
+    /**
+     * The most recent Modrinth release tags, newest first. Used instead of a single exact
+     * "latest" version when a server has no explicit Minecraft version configured: plugin
+     * authors often lag behind re-tagging support for the very newest release even though
+     * nothing in the plugin actually changed, so a single exact match hides plugins that
+     * work fine on it. This has no effect once a server sets an explicit version, since that
+     * is treated as an exact requirement instead.
+     *
+     * @return string[]
+     */
+    protected function getRecentMinecraftVersions(): array
+    {
+        return cache()->remember('modrinth:recent_minecraft_versions', now()->addHour(), function () {
+            try {
+                /** @var array<int, mixed> $versions */
+                $versions = Http::asJson()
+                    ->timeout(5)
+                    ->connectTimeout(5)
+                    ->throw()
+                    ->get('https://api.modrinth.com/v2/tag/game_version')
+                    ->json();
+
+                return collect($versions)
+                    ->filter(fn ($version) => $version['version_type'] === 'release')
+                    ->take(5)
+                    ->pluck('version')
+                    ->all();
+            } catch (Exception $exception) {
+                report($exception);
+
+                return [];
+            }
+        });
+    }
+
+    protected function getConfiguredMinecraftVersion(Server $server): ?string
+    {
+        $version = $server->variables()->where(fn ($builder) => $builder->where('env_variable', 'MINECRAFT_VERSION')->orWhere('env_variable', 'MC_VERSION'))->first()?->server_value;
+
+        return ($version && $version !== 'latest') ? $version : null;
+    }
+
+    /**
+     * Minecraft versions to filter search/version-list results by. An explicit server
+     * version is an exact requirement (a single value), but a server without one falls
+     * back to a small window of the most recent releases rather than only the single
+     * newest, for the reason explained on getRecentMinecraftVersions().
+     *
+     * @return string[]
+     */
+    protected function getMinecraftVersionsForFiltering(Server $server): array
+    {
+        $configured = $this->getConfiguredMinecraftVersion($server);
+        if ($configured) {
+            return [$configured];
+        }
+
+        $recent = $this->getRecentMinecraftVersions();
+        if (!empty($recent)) {
+            return $recent;
+        }
+
+        return array_filter([$this->getLatestMinecraftVersion()]);
     }
 
     /** @return array{icon: string, name: string, supported_project_types: string[], display_name: string}|null */
@@ -169,7 +228,8 @@ class MinecraftModrinthService
 
         $facetGroups = ["[$loaderFacets]"];
         if (!$this->isProxyLoader($minecraftLoader)) {
-            $facetGroups[] = "[\"versions:$minecraftVersion\"]";
+            $versionFacets = implode(',', array_map(fn ($version) => "\"versions:$version\"", $this->getMinecraftVersionsForFiltering($server)));
+            $facetGroups[] = "[$versionFacets]";
         }
         $facetGroups[] = '["project_type:mod","project_type:plugin"]';
 
@@ -315,7 +375,7 @@ class MinecraftModrinthService
     }
 
     /** @return array{game_versions?: string, loaders: string} */
-    protected function getVersionsQuery(?string $minecraftVersion, string $minecraftLoader): array
+    protected function getVersionsQuery(Server $server, string $minecraftLoader): array
     {
         $loaders = implode(',', array_map(fn ($loader) => "\"$loader\"", $this->getCompatibleLoaders($minecraftLoader)));
 
@@ -324,7 +384,8 @@ class MinecraftModrinthService
         ];
 
         if (!$this->isProxyLoader($minecraftLoader)) {
-            $query['game_versions'] = "[\"$minecraftVersion\"]";
+            $versions = implode(',', array_map(fn ($version) => "\"$version\"", $this->getMinecraftVersionsForFiltering($server)));
+            $query['game_versions'] = "[$versions]";
         }
 
         return $query;
@@ -371,7 +432,7 @@ class MinecraftModrinthService
                 ->timeout(5)
                 ->connectTimeout(5)
                 ->throw()
-                ->get("https://api.modrinth.com/v2/project/$projectId/version", $this->getVersionsQuery($minecraftVersion, $minecraftLoader))
+                ->get("https://api.modrinth.com/v2/project/$projectId/version", $this->getVersionsQuery($server, $minecraftLoader))
                 ->json();
         } catch (Exception $exception) {
             report($exception);
@@ -410,7 +471,7 @@ class MinecraftModrinthService
 
         $minecraftVersion = $this->getMinecraftVersion($server);
         $minecraftLoader = $minecraftLoader['name'];
-        $query = $this->getVersionsQuery($minecraftVersion, $minecraftLoader);
+        $query = $this->getVersionsQuery($server, $minecraftLoader);
 
         $results = [];
         $missing = [];
