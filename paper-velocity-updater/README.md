@@ -35,27 +35,29 @@ A server without any of these variables is left untouched.
 
 ## Configuration
 
-Optional environment variables (defaults shown):
+Under **Admin → Plugins → Paper & Velocity Updater → Settings** in the panel:
 
-```env
-PAPER_VELOCITY_UPDATER_ENABLED=true
-PAPER_VELOCITY_UPDATER_CACHE_MINUTES=15
-PAPER_VELOCITY_UPDATER_REPORT_THROTTLE_MINUTES=30
-PAPER_VELOCITY_UPDATER_DOWNLOAD_TIMEOUT_SECONDS=300
-```
-
-- `REPORT_THROTTLE_MINUTES` limits how often the *same* failure (PaperMC or the daemon being
-  unreachable, etc.) for a given server gets logged - at most once per that many minutes, no
-  matter how many times you restart the server in the meantime (e.g. while still configuring it).
-  Set it to `0` to log every occurrence.
-- `DOWNLOAD_TIMEOUT_SECONDS` overrides the daemon client's normal 15 second timeout
+- **Enabled** - turn the whole plugin on/off.
+- **Version/build cache (minutes)** - how long a resolved "latest version"/"latest build" lookup
+  is cached before PaperMC is asked again (default `15`).
+- **Download timeout (seconds)** - overrides the daemon client's normal 15 second timeout
   (`panel.guzzle.timeout`) for the actual jar download/write, which is far too short for a
-  ~50-60MB Paper/Velocity jar. Raise it if your nodes have a slow link to PaperMC's CDN.
+  ~50-60MB Paper/Velocity jar. Raise it if your nodes have a slow link to PaperMC's CDN
+  (default `300`).
+- **Failure log throttle (minutes)** - the same failure (PaperMC or the daemon being
+  unreachable, etc.) for a given server is only logged once per this many minutes, no matter how
+  many times you restart the server in the meantime (e.g. while still configuring it). Set to `0`
+  to log every occurrence (default `30`).
+
+These are stored as environment variables (`PAPER_VELOCITY_UPDATER_ENABLED`,
+`PAPER_VELOCITY_UPDATER_CACHE_MINUTES`, `PAPER_VELOCITY_UPDATER_DOWNLOAD_TIMEOUT_SECONDS`,
+`PAPER_VELOCITY_UPDATER_REPORT_THROTTLE_MINUTES`) and can be set directly in `.env` instead if
+you prefer - the settings page just writes to the same place.
 
 ## Limitations
 
-- Restarting a server frequently is safe: repeated restarts within `CACHE_MINUTES` reuse the
-  already-resolved version/build instead of re-querying PaperMC, and a restart is skipped
+- Restarting a server frequently is safe: repeated restarts within the version/build cache window
+  reuse the already-resolved version/build instead of re-querying PaperMC, and a restart is skipped
   entirely once the marker file shows the currently installed build is already the target one -
   so it never re-downloads the same jar over and over. A per-server lock also prevents two
   restarts in quick succession from downloading into the same file at once.
@@ -65,8 +67,8 @@ PAPER_VELOCITY_UPDATER_DOWNLOAD_TIMEOUT_SECONDS=300
 - Only `STABLE` channel builds are used for automatic updates. If a pinned version only has
   `BETA`/`ALPHA` builds, the newest available build is used instead.
 - A failed *check* (e.g. PaperMC being unreachable) never blocks the server from starting - it
-  just starts on the previously installed jar (see `REPORT_THROTTLE_MINUTES` above for how that
-  gets logged without spamming). A failed *download*, however, deliberately fails the whole power
+  just starts on the previously installed jar (see the failure log throttle setting above for how
+  that gets logged without spamming). A failed *download*, however, deliberately fails the whole power
   action instead of proceeding to start/restart the server: the daemon may still be mid-write on
   that exact jar file even after our request to it gives up, so starting the server anyway could
   mean running a half-written jar. If that happens, the power action itself errors out and the
