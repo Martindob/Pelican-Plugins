@@ -43,8 +43,9 @@ class SourceQueryTypeSchema implements QueryTypeSchemaInterface
                 'max_players' => $info['MaxPlayers'],
                 'players' => array_map(fn ($player) => ['id' => (string) $player['Id'], 'name' => (string) $player['Name']], $players),
             ];
-        } catch (Exception $exception) {
-            report($exception);
+        } catch (Exception) {
+            // Not reported: a failed query almost always just means the server is offline,
+            // starting or otherwise unreachable, not an application error.
         } finally {
             $query->Disconnect();
         }

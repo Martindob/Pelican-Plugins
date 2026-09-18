@@ -58,8 +58,10 @@ class MinecraftJavaQueryTypeSchema implements QueryTypeSchemaInterface
                 'max_players' => $info['MaxPlayers'],
                 'players' => array_map(fn ($player) => ['id' => (string) $player, 'name' => (string) $player], $players),
             ];
-        } catch (Exception $exception) {
-            report($exception);
+        } catch (Exception) {
+            // Not reported: a failed query almost always just means the server is offline,
+            // starting or otherwise unreachable, not an application error. It falls back to
+            // tryPing() below, and the UI already reflects an unreachable server on its own.
         }
 
         return false;
@@ -84,8 +86,8 @@ class MinecraftJavaQueryTypeSchema implements QueryTypeSchemaInterface
                 'max_players' => $data['players']['max'],
                 'players' => $data['players']['sample'] ?? [],
             ];
-        } catch (Exception $exception) {
-            report($exception);
+        } catch (Exception) {
+            // Not reported, see tryQuery() above - same reasoning applies to the ping fallback.
         } finally {
             if (isset($ping)) {
                 $ping->Close();

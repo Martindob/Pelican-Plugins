@@ -40,8 +40,9 @@ class MinecraftBedrockQueryTypeSchema implements QueryTypeSchemaInterface
                 'max_players' => $info['MaxPlayers'],
                 'players' => null, // Bedrock has no player list
             ];
-        } catch (Exception $exception) {
-            report($exception);
+        } catch (Exception) {
+            // Not reported: a failed query almost always just means the server is offline,
+            // starting or otherwise unreachable, not an application error.
         }
 
         return null;

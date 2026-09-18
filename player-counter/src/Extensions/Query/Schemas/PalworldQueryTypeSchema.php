@@ -50,9 +50,9 @@ class PalworldQueryTypeSchema implements QueryTypeSchemaInterface
                 'players' => array_map(fn ($player) => ['id' => (string) ($player['playerId'] ?? $player['userId']), 'name' => (string) $player['name']], $players),
             ];
 
-        } catch (Exception $exception) {
-            report($exception);
-
+        } catch (Exception) {
+            // Not reported: a failed query almost always just means the server is offline,
+            // starting or otherwise unreachable, not an application error.
             return null;
         }
     }
