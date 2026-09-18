@@ -11,7 +11,7 @@ return [
     'no_variable' => 'Bez proměnné',
     'port_variable_hint' => 'Název proměnné prostředí spouštěcí proměnné, která se použije k získání portu dotazu, např. "QUERY_PORT". Pokud je hodnota nastavena, offset portu dotazu bude ignorován! Ponechte prázdné pro použití portu alokace a offsetu.',
     'eggs' => 'Vejce',
-    'no_eggs' => 'Žádné vejce',
+    'no_eggs' => 'Žádná vejce',
     'hostname' => 'Název serveru',
     'players' => 'Hráči',
     'map' => 'Mapa',
