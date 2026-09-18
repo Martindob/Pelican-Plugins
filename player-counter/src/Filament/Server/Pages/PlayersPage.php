@@ -196,7 +196,7 @@ class PlayersPage extends Page implements HasTable
             ])
             ->recordActions([
                 Action::make('exclude_kick')
-                    ->visible(fn () => !$this->activeTab || $this->activeTab === 'online')
+                    ->visible(fn () => (!$this->activeTab || $this->activeTab === 'online') && !$this->isProxy)
                     ->label(trans('player-counter::query.kick'))
                     ->icon('tabler-door-exit')
                     ->color('danger')
@@ -225,7 +225,7 @@ class PlayersPage extends Page implements HasTable
                         }
                     }),
                 Action::make('exclude_ban')
-                    ->visible(fn () => !$this->activeTab || $this->activeTab === 'online')
+                    ->visible(fn () => (!$this->activeTab || $this->activeTab === 'online') && !$this->isProxy)
                     ->label(trans('player-counter::query.ban'))
                     ->icon('tabler-hammer')
                     ->color('danger')
