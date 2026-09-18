@@ -90,6 +90,27 @@ class PlayerCounterSeeder extends Seeder
             'query_port_variable' => null,
         ],
         [
+            'names' => 'Velocity',
+            'tag' => 'velocity',
+            'query_type' => 'minecraft_proxy',
+            'query_port_offset' => null,
+            'query_port_variable' => null,
+        ],
+        [
+            'names' => 'BungeeCord',
+            'tag' => 'bungeecord',
+            'query_type' => 'minecraft_proxy',
+            'query_port_offset' => null,
+            'query_port_variable' => null,
+        ],
+        [
+            'names' => 'Waterfall',
+            'tag' => 'waterfall',
+            'query_type' => 'minecraft_proxy',
+            'query_port_offset' => null,
+            'query_port_variable' => null,
+        ],
+        [
             'tag' => 'source',
             'query_type' => 'source',
             'query_port_offset' => null,
