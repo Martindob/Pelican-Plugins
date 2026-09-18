@@ -104,6 +104,27 @@ class MinecraftModrinthService
         });
     }
 
+    /**
+     * Loaders that can also run plugins/mods published only for an upstream loader they
+     * are backwards-compatible with, e.g. a Paper server can run plain Spigot/Bukkit plugins.
+     * Only one direction: a plugin published for the fork isn't guaranteed to run on the
+     * upstream loader, so the reverse mapping is intentionally not added.
+     *
+     * @return string[]
+     */
+    protected function getCompatibleLoaders(string $loader): array
+    {
+        return match ($loader) {
+            'spigot' => ['spigot', 'bukkit'],
+            'paper' => ['paper', 'spigot', 'bukkit'],
+            'purpur' => ['purpur', 'paper', 'spigot', 'bukkit'],
+            'folia' => ['folia', 'paper', 'spigot', 'bukkit'],
+            'waterfall' => ['waterfall', 'bungeecord'],
+            'quilt' => ['quilt', 'fabric'],
+            default => [$loader],
+        };
+    }
+
     /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
     public function getProjects(Server $server, ModrinthProjectType $modrinthProjectType, int $page = 1, ?string $search = null): array
     {
@@ -120,10 +141,12 @@ class MinecraftModrinthService
         $minecraftVersion = $this->getMinecraftVersion($server);
         $minecraftLoader = $minecraftLoader['name'];
 
+        $loaderFacets = implode(',', array_map(fn ($loader) => "\"categories:$loader\"", $this->getCompatibleLoaders($minecraftLoader)));
+
         $data = [
             'offset' => ($page - 1) * 20,
             'limit' => 20,
-            'facets' => "[[\"categories:$minecraftLoader\"],[\"versions:$minecraftVersion\"],[\"project_type:{$modrinthProjectType}\"]]",
+            'facets' => "[[$loaderFacets],[\"versions:$minecraftVersion\"],[\"project_type:{$modrinthProjectType}\"]]",
         ];
 
         $key = "modrinth_projects:{$modrinthProjectType}:$minecraftVersion:$minecraftLoader:$page";
@@ -264,9 +287,11 @@ class MinecraftModrinthService
     /** @return array{game_versions: string, loaders: string} */
     protected function getVersionsQuery(?string $minecraftVersion, string $minecraftLoader): array
     {
+        $loaders = implode(',', array_map(fn ($loader) => "\"$loader\"", $this->getCompatibleLoaders($minecraftLoader)));
+
         return [
             'game_versions' => "[\"$minecraftVersion\"]",
-            'loaders' => "[\"$minecraftLoader\"]",
+            'loaders' => "[$loaders]",
         ];
     }
 
