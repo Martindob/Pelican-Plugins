@@ -137,7 +137,19 @@ class MinecraftModrinthService
         return in_array($loader, ['velocity', 'bungeecord', 'waterfall'], true);
     }
 
-    /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
+    /**
+     * Modrinth's own "project_type" field (mod/plugin/resourcepack/...) is whatever the
+     * author picked when they first created the project; a Bukkit-family project can be
+     * stored as "mod" even though it only has paper/spigot/purpur versions and Modrinth's
+     * own site lists it under /plugin/ (it decides that split by loader, not this field).
+     * Filtering strictly by our own Mod/Plugin enum value against that field hid projects
+     * like https://modrinth.com/plugin/excellenteconomy this way. The loader/category facet
+     * already discriminates mod-loader projects (fabric/forge/...) from plugin-loader ones
+     * (paper/spigot/...), so project_type is only kept as a loose safety net excluding
+     * unrelated types like resourcepacks/shaders/datapacks, not as the mod/plugin split.
+     *
+     * @return array{hits: array<int, array<string, mixed>>, total_hits: int}
+     */
     public function getProjects(Server $server, ModrinthProjectType $modrinthProjectType, int $page = 1, ?string $search = null): array
     {
         $modrinthProjectType = $modrinthProjectType->value;
@@ -159,7 +171,7 @@ class MinecraftModrinthService
         if (!$this->isProxyLoader($minecraftLoader)) {
             $facetGroups[] = "[\"versions:$minecraftVersion\"]";
         }
-        $facetGroups[] = "[\"project_type:{$modrinthProjectType}\"]";
+        $facetGroups[] = '["project_type:mod","project_type:plugin"]';
 
         $data = [
             'offset' => ($page - 1) * 20,
