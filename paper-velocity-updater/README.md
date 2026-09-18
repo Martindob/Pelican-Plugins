@@ -29,8 +29,9 @@ A server without any of these variables is left untouched.
    to `26.3` just because that becomes the newest version.
 4. If that build differs from the one last installed (tracked in a small `.paper-velocity-updater.json`
    marker file in the server's root), the jar is downloaded straight into the server directory
-   (via the daemon's file-pull API) and the marker is updated - all before the power signal is
-   forwarded, so the server always boots on the version it just downloaded.
+   (via the daemon's file-pull API, with a generous timeout - see below) and the marker is
+   updated - all before the power signal is forwarded, so the server always boots on the version
+   it just downloaded.
 
 ## Configuration
 
@@ -40,24 +41,33 @@ Optional environment variables (defaults shown):
 PAPER_VELOCITY_UPDATER_ENABLED=true
 PAPER_VELOCITY_UPDATER_CACHE_MINUTES=15
 PAPER_VELOCITY_UPDATER_REPORT_THROTTLE_MINUTES=30
+PAPER_VELOCITY_UPDATER_DOWNLOAD_TIMEOUT_SECONDS=300
 ```
 
-`REPORT_THROTTLE_MINUTES` limits how often the *same* failure (PaperMC or the daemon being
-unreachable, etc.) for a given server gets logged - at most once per that many minutes, no
-matter how many times you restart the server in the meantime (e.g. while still configuring it).
-Set it to `0` to log every occurrence.
+- `REPORT_THROTTLE_MINUTES` limits how often the *same* failure (PaperMC or the daemon being
+  unreachable, etc.) for a given server gets logged - at most once per that many minutes, no
+  matter how many times you restart the server in the meantime (e.g. while still configuring it).
+  Set it to `0` to log every occurrence.
+- `DOWNLOAD_TIMEOUT_SECONDS` overrides the daemon client's normal 15 second timeout
+  (`panel.guzzle.timeout`) for the actual jar download/write, which is far too short for a
+  ~50-60MB Paper/Velocity jar. Raise it if your nodes have a slow link to PaperMC's CDN.
 
 ## Limitations
 
 - Restarting a server frequently is safe: repeated restarts within `CACHE_MINUTES` reuse the
   already-resolved version/build instead of re-querying PaperMC, and a restart is skipped
   entirely once the marker file shows the currently installed build is already the target one -
-  so it never re-downloads the same jar over and over.
+  so it never re-downloads the same jar over and over. A per-server lock also prevents two
+  restarts in quick succession from downloading into the same file at once.
 - This only runs for power actions sent through the panel (console, client API, scheduled
   tasks). If Wings itself restarts a crashed server without asking the panel, this hook is not
   triggered.
 - Only `STABLE` channel builds are used for automatic updates. If a pinned version only has
   `BETA`/`ALPHA` builds, the newest available build is used instead.
-- A failed update check (e.g. PaperMC being unreachable) never blocks the server from starting -
-  it just starts on the previously installed jar. See `REPORT_THROTTLE_MINUTES` above for how
-  that gets logged without spamming.
+- A failed *check* (e.g. PaperMC being unreachable) never blocks the server from starting - it
+  just starts on the previously installed jar (see `REPORT_THROTTLE_MINUTES` above for how that
+  gets logged without spamming). A failed *download*, however, deliberately fails the whole power
+  action instead of proceeding to start/restart the server: the daemon may still be mid-write on
+  that exact jar file even after our request to it gives up, so starting the server anyway could
+  mean running a half-written jar. If that happens, the power action itself errors out and the
+  server keeps its previous state - just retry the restart.

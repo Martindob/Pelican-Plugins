@@ -3,6 +3,7 @@
 namespace Martindob\PaperVelocityUpdater\Repositories;
 
 use App\Repositories\Daemon\DaemonServerRepository;
+use Exception;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Martindob\PaperVelocityUpdater\Services\PaperVelocityUpdateService;
@@ -21,7 +22,13 @@ class UpdateCheckingDaemonServerRepository extends DaemonServerRepository
     public function __construct(private readonly PaperVelocityUpdateService $updateService) {}
 
     /**
-     * @throws ConnectionException
+     * If the update check itself fails (PaperMC/daemon unreachable, ...) this still
+     * proceeds to the actual power signal - see PaperVelocityUpdateService::maybeUpdate().
+     * A failed *download*, however, is deliberately allowed to abort this method
+     * entirely: never send "start"/"restart" to Wings while the jar it's about to
+     * run might still be mid-write on the daemon.
+     *
+     * @throws ConnectionException|Exception
      */
     public function power(string $action): Response
     {

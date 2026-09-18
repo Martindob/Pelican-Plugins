@@ -27,8 +27,17 @@ class PaperVelocityUpdateService
      * Checks whether a newer Paper/Velocity build is available for the server and,
      * if so, downloads it and replaces the server jar before it (re)starts.
      *
-     * This must never throw: a failed update check should never prevent a server
-     * from actually starting.
+     * A failed *check* (PaperMC unreachable, daemon read error, ...) never prevents
+     * the server from starting - it just boots on whatever jar is already there.
+     * A failed *download* is different: once the daemon has been asked to pull a
+     * file, it may still be mid-write on the exact jar the server is about to run
+     * even if our request to it times out (the daemon keeps writing in the
+     * background regardless of whether the panel is still waiting on it). So unlike
+     * the check itself, that failure is deliberately allowed to propagate out of
+     * this method and out of power() - the whole power action fails instead of
+     * risking a start against a half-written jar.
+     *
+     * @throws Exception
      */
     public function maybeUpdate(Server $server): void
     {
@@ -36,91 +45,145 @@ class PaperVelocityUpdateService
             return;
         }
 
+        // Guards against two power actions (e.g. a double restart click) racing to
+        // download and write the same jar file at once. If the lock is already
+        // held, this restart simply skips the check and boots whatever is currently
+        // on disk instead of risking two interleaved writes to the same file.
+        Cache::lock("paper-velocity-updater:server:{$server->id}", $this->downloadTimeoutSeconds() + 60)->get(function () use ($server) {
+            $plan = $this->plan($server);
+            if ($plan !== null) {
+                $this->applyPlan($server, $plan);
+            }
+        });
+    }
+
+    /**
+     * Works out whether an update is needed and, if so, what to download. Every
+     * failure here (PaperMC or the daemon being unreachable, a bad response, ...)
+     * is safe to swallow: nothing has been written yet, so the server can just
+     * start on whatever jar is already on disk.
+     *
+     * @return array{fileRepository: DaemonFileRepository, project: string, version: string, build: int, jar: string, url: string}|null
+     */
+    private function plan(Server $server): ?array
+    {
         try {
-            // Guards against two power actions (e.g. a double restart click) racing to
-            // download and write the same jar file at once. If the lock is already held,
-            // this restart simply skips the check and boots whatever is currently on
-            // disk instead of risking two interleaved writes to the same file.
-            Cache::lock("paper-velocity-updater:server:{$server->id}", 120)->get(fn () => $this->update($server));
+            $server->loadMissing('variables');
+
+            $project = $this->detectProject($server);
+            if ($project === null) {
+                return null;
+            }
+
+            // Respect an explicitly pinned build number; only "latest" (the default
+            // shown in the startup variables) triggers an automatic update.
+            $buildVariable = $this->getVariable($server, 'BUILD_NUMBER');
+            if ($buildVariable !== null && !$this->isLatest($buildVariable)) {
+                return null;
+            }
+
+            $jarFile = $this->getVariable($server, 'SERVER_JARFILE') ?? ($project === 'velocity' ? 'velocity.jar' : 'server.jar');
+
+            $requestedVersion = null;
+            foreach (self::PROJECT_VERSION_VARIABLES[$project] as $variableName) {
+                $requestedVersion = $this->getVariable($server, $variableName);
+                if ($requestedVersion !== null) {
+                    break;
+                }
+            }
+
+            $version = $this->resolveVersion($project, $requestedVersion);
+            if ($version === null) {
+                return null;
+            }
+
+            $build = $this->resolveLatestBuild($project, $version);
+            if ($build === null) {
+                return null;
+            }
+
+            $download = $build['downloads']['server:default'] ?? null;
+            if (!is_array($download) || !isset($download['url'])) {
+                return null;
+            }
+
+            $fileRepository = app(DaemonFileRepository::class)->setServer($server);
+
+            $state = $this->readState($fileRepository, $server->id);
+            $upToDate = $state !== null
+                && ($state['project'] ?? null) === $project
+                && ($state['version'] ?? null) === $version
+                && ($state['build'] ?? null) === $build['id']
+                && ($state['jar'] ?? null) === $jarFile
+                && $this->jarExists($fileRepository, $jarFile);
+
+            if ($upToDate) {
+                return null;
+            }
+
+            return [
+                'fileRepository' => $fileRepository,
+                'project' => $project,
+                'version' => $version,
+                'build' => $build['id'],
+                'jar' => $jarFile,
+                'url' => $download['url'],
+            ];
         } catch (Exception $exception) {
-            // Someone restarting a server repeatedly (e.g. while still configuring it)
-            // would otherwise log the same daemon/network failure on every single
-            // restart. One log entry per server/error per window is enough to notice
-            // a real, persistent problem without spamming the log.
+            // Someone restarting a server repeatedly (e.g. while still configuring
+            // it) would otherwise log the same daemon/network failure on every
+            // single restart. One log entry per server/error per window is enough
+            // to notice a real, persistent problem without spamming the log.
             $this->reportOncePerWindow("server:{$server->id}:" . $exception::class, $exception);
+
+            return null;
         }
     }
 
     /**
+     * Downloads the resolved build straight into the server directory, replacing
+     * the existing jar, and records what was installed.
+     *
+     * Uses a much longer timeout than the daemon client's 15 second default
+     * (config('panel.guzzle.timeout')): that default is fine for small API calls
+     * but a ~50-60MB Paper/Velocity jar can easily take longer than that,
+     * especially on a slower node.
+     *
+     * @param  array{fileRepository: DaemonFileRepository, project: string, version: string, build: int, jar: string, url: string}  $plan
+     *
      * @throws Exception
      */
-    private function update(Server $server): void
+    private function applyPlan(Server $server, array $plan): void
     {
-        $server->loadMissing('variables');
+        $plan['fileRepository']->getHttpClient()
+            ->timeout(max((int) config('panel.guzzle.timeout'), $this->downloadTimeoutSeconds()))
+            ->post("/api/servers/{$server->uuid}/files/pull", [
+                'url' => $plan['url'],
+                'root' => '/',
+                'file_name' => $plan['jar'],
+                'foreground' => true,
+            ])
+            ->throw();
 
-        $project = $this->detectProject($server);
-        if ($project === null) {
-            return;
+        try {
+            $this->writeState($plan['fileRepository'], [
+                'project' => $plan['project'],
+                'version' => $plan['version'],
+                'build' => $plan['build'],
+                'jar' => $plan['jar'],
+                'updated_at' => now()->toIso8601String(),
+            ]);
+        } catch (Exception $exception) {
+            // The jar itself already downloaded fine at this point; losing the
+            // marker only means the next restart re-verifies (and, worst case,
+            // re-downloads) unnecessarily - not worth failing the power action over.
+            $this->reportOncePerWindow("server:{$server->id}:write-state", $exception);
         }
+    }
 
-        // Respect an explicitly pinned build number; only "latest" (the default
-        // shown in the startup variables) triggers an automatic update.
-        $buildVariable = $this->getVariable($server, 'BUILD_NUMBER');
-        if ($buildVariable !== null && !$this->isLatest($buildVariable)) {
-            return;
-        }
-
-        $jarFile = $this->getVariable($server, 'SERVER_JARFILE') ?? ($project === 'velocity' ? 'velocity.jar' : 'server.jar');
-
-        $requestedVersion = null;
-        foreach (self::PROJECT_VERSION_VARIABLES[$project] as $variableName) {
-            $requestedVersion = $this->getVariable($server, $variableName);
-            if ($requestedVersion !== null) {
-                break;
-            }
-        }
-
-        $version = $this->resolveVersion($project, $requestedVersion);
-        if ($version === null) {
-            return;
-        }
-
-        $build = $this->resolveLatestBuild($project, $version);
-        if ($build === null) {
-            return;
-        }
-
-        $download = $build['downloads']['server:default'] ?? null;
-        if (!is_array($download) || !isset($download['url'])) {
-            return;
-        }
-
-        $fileRepository = app(DaemonFileRepository::class)->setServer($server);
-
-        $state = $this->readState($fileRepository, $server->id);
-        $upToDate = $state !== null
-            && ($state['project'] ?? null) === $project
-            && ($state['version'] ?? null) === $version
-            && ($state['build'] ?? null) === $build['id']
-            && ($state['jar'] ?? null) === $jarFile
-            && $this->jarExists($fileRepository, $jarFile);
-
-        if ($upToDate) {
-            return;
-        }
-
-        $fileRepository->pull($download['url'], '/', [
-            'filename' => $jarFile,
-            'foreground' => true,
-        ]);
-
-        $this->writeState($fileRepository, [
-            'project' => $project,
-            'version' => $version,
-            'build' => $build['id'],
-            'jar' => $jarFile,
-            'updated_at' => now()->toIso8601String(),
-        ]);
+    private function downloadTimeoutSeconds(): int
+    {
+        return (int) config('paper-velocity-updater.download_timeout_seconds', 300);
     }
 
     /** Detects whether this server is a Paper or Velocity server from its startup variables. */
