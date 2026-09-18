@@ -6,7 +6,8 @@ return [
     'minecraft_plugins' => 'Minecraft Pluginy',
 
     'settings' => [
-        'latest_minecraft_version' => 'Nejnovější verze Minecraftu',
+        'always_use_latest_version' => 'Vždy použít nejnovější verzi',
+        'always_use_latest_version_hint' => 'Přeskočí kontrolu kompatibility s verzí Minecraftu při hledání a instalaci modů/pluginů a vždy použije nejnovější dostupnou verzi pro detekovaný loader. Užitečné pro aktualizaci modů/pluginů ještě před povýšením serveru na novější verzi Minecraftu, protože se spoléhá na jejich obvyklou zpětnou kompatibilitu. Kompatibilita loaderu (Paper/Spigot/Fabric/...) se pořád kontroluje.',
         'settings_saved' => 'Nastavení uloženo',
     ],
 

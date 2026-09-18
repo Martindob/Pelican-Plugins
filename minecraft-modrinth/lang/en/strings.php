@@ -6,7 +6,8 @@ return [
     'minecraft_plugins' => 'Minecraft Plugins',
 
     'settings' => [
-        'latest_minecraft_version' => 'Latest Minecraft Version',
+        'always_use_latest_version' => 'Always Use Latest Version',
+        'always_use_latest_version_hint' => 'Skip the Minecraft version compatibility check when searching for and installing mods/plugins, always using the newest available version for the detected loader. Useful for updating mods/plugins ahead of upgrading the server to a newer Minecraft version, relying on their usual backwards compatibility. Loader compatibility (Paper/Spigot/Fabric/...) is still enforced.',
         'settings_saved' => 'Settings saved',
     ],
 

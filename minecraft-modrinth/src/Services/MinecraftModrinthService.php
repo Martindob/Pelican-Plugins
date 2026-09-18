@@ -197,6 +197,19 @@ class MinecraftModrinthService
     }
 
     /**
+     * Whether search/version-list results should be restricted to a Minecraft version at
+     * all. Always false for proxy loaders (see isProxyLoader()), and also false when the
+     * "Always Use Latest Version" plugin setting is on, for admins who'd rather always get
+     * the newest available mod/plugin version - e.g. to update everything ahead of upgrading
+     * the server itself to a newer Minecraft version - and accept the (usual) backwards
+     * compatibility risk themselves instead of waiting on Modrinth authors to re-tag support.
+     */
+    protected function shouldFilterByMinecraftVersion(string $loader): bool
+    {
+        return !$this->isProxyLoader($loader) && !(bool) config('minecraft-modrinth.always_use_latest_version');
+    }
+
+    /**
      * Modrinth's own "project_type" field (mod/plugin/resourcepack/...) is whatever the
      * author picked when they first created the project; a Bukkit-family project can be
      * stored as "mod" even though it only has paper/spigot/purpur versions and Modrinth's
@@ -227,7 +240,7 @@ class MinecraftModrinthService
         $loaderFacets = implode(',', array_map(fn ($loader) => "\"categories:$loader\"", $this->getCompatibleLoaders($minecraftLoader)));
 
         $facetGroups = ["[$loaderFacets]"];
-        if (!$this->isProxyLoader($minecraftLoader)) {
+        if ($this->shouldFilterByMinecraftVersion($minecraftLoader)) {
             $versionFacets = implode(',', array_map(fn ($version) => "\"versions:$version\"", $this->getMinecraftVersionsForFiltering($server)));
             $facetGroups[] = "[$versionFacets]";
         }
@@ -383,7 +396,7 @@ class MinecraftModrinthService
             'loaders' => "[$loaders]",
         ];
 
-        if (!$this->isProxyLoader($minecraftLoader)) {
+        if ($this->shouldFilterByMinecraftVersion($minecraftLoader)) {
             $versions = implode(',', array_map(fn ($version) => "\"$version\"", $this->getMinecraftVersionsForFiltering($server)));
             $query['game_versions'] = "[$versions]";
         }
