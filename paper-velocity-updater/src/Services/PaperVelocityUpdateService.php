@@ -45,16 +45,24 @@ class PaperVelocityUpdateService
             return;
         }
 
-        // Guards against two power actions (e.g. a double restart click) racing to
-        // download and write the same jar file at once. If the lock is already
-        // held, this restart simply skips the check and boots whatever is currently
-        // on disk instead of risking two interleaved writes to the same file.
-        Cache::lock("paper-velocity-updater:server:{$server->id}", $this->downloadTimeoutSeconds() + 60)->get(function () use ($server) {
-            $plan = $this->plan($server);
-            if ($plan !== null) {
-                $this->applyPlan($server, $plan);
-            }
-        });
+        // Two "start"/"restart" clicks fired in quick succession (a double click, or
+        // restart followed immediately by start) must never let the second one race
+        // ahead of the first's download: skipping the check outright when the lock
+        // is already held would let it proceed straight to its own power signal
+        // while the first request might still be mid-write on the very jar the
+        // server is about to run. So this *waits* for any in-flight check/download
+        // for this server to finish - rather than skipping past it - before this
+        // action is allowed to continue to its own power signal. A LockTimeoutException
+        // here is deliberately not caught, for the same reason a download failure
+        // isn't: proceeding without knowing whether the other write finished is
+        // exactly the risk this is meant to avoid.
+        Cache::lock("paper-velocity-updater:server:{$server->id}", $this->downloadTimeoutSeconds() + 60)
+            ->block($this->downloadTimeoutSeconds() + 30, function () use ($server) {
+                $plan = $this->plan($server);
+                if ($plan !== null) {
+                    $this->applyPlan($server, $plan);
+                }
+            });
     }
 
     /**

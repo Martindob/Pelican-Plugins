@@ -59,8 +59,14 @@ you prefer - the settings page just writes to the same place.
 - Restarting a server frequently is safe: repeated restarts within the version/build cache window
   reuse the already-resolved version/build instead of re-querying PaperMC, and a restart is skipped
   entirely once the marker file shows the currently installed build is already the target one -
-  so it never re-downloads the same jar over and over. A per-server lock also prevents two
-  restarts in quick succession from downloading into the same file at once.
+  so it never re-downloads the same jar over and over.
+- Firing power actions in quick succession (double-clicking restart, hitting start right after a
+  restart, force-stopping and immediately starting again, ...) is safe too. `start`/`restart` share
+  a per-server lock: a second `start`/`restart` that arrives while the first is still checking or
+  downloading *waits* for it to finish rather than racing ahead - so it can never send its own
+  power signal while the daemon might still be mid-write on the jar the server is about to run.
+  `stop`/`kill` are untouched by this plugin entirely (it only hooks `start`/`restart`), so they're
+  always sent immediately and never wait on anything - they don't touch the jar file either way.
 - This only runs for power actions sent through the panel (console, client API, scheduled
   tasks). If Wings itself restarts a crashed server without asking the panel, this hook is not
   triggered.
@@ -68,8 +74,8 @@ you prefer - the settings page just writes to the same place.
   `BETA`/`ALPHA` builds, the newest available build is used instead.
 - A failed *check* (e.g. PaperMC being unreachable) never blocks the server from starting - it
   just starts on the previously installed jar (see the failure log throttle setting above for how
-  that gets logged without spamming). A failed *download*, however, deliberately fails the whole power
-  action instead of proceeding to start/restart the server: the daemon may still be mid-write on
-  that exact jar file even after our request to it gives up, so starting the server anyway could
-  mean running a half-written jar. If that happens, the power action itself errors out and the
-  server keeps its previous state - just retry the restart.
+  that gets logged without spamming). A failed *download*, or waiting too long for another
+  in-flight check/download on the same server to finish, deliberately fails the whole power action
+  instead of proceeding to start/restart the server: the daemon may still be mid-write on that
+  exact jar file, so starting the server anyway could mean running a half-written jar. If that
+  happens, the power action itself errors out and the server keeps its previous state - just retry.
