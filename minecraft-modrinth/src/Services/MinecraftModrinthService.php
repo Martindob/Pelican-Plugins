@@ -125,6 +125,18 @@ class MinecraftModrinthService
         };
     }
 
+    /**
+     * Proxy loaders aren't tied to a specific Minecraft version the way a server is: they
+     * relay the protocol for whatever version the backend servers run, so a plugin's declared
+     * Minecraft game versions on Modrinth mostly just reflect whenever it was last published,
+     * not what it's actually compatible with. Filtering those by an exact game version hides
+     * older but still working proxy plugins, so the version filter is skipped for them.
+     */
+    protected function isProxyLoader(string $loader): bool
+    {
+        return in_array($loader, ['velocity', 'bungeecord', 'waterfall'], true);
+    }
+
     /** @return array{hits: array<int, array<string, mixed>>, total_hits: int} */
     public function getProjects(Server $server, ModrinthProjectType $modrinthProjectType, int $page = 1, ?string $search = null): array
     {
@@ -143,10 +155,16 @@ class MinecraftModrinthService
 
         $loaderFacets = implode(',', array_map(fn ($loader) => "\"categories:$loader\"", $this->getCompatibleLoaders($minecraftLoader)));
 
+        $facetGroups = ["[$loaderFacets]"];
+        if (!$this->isProxyLoader($minecraftLoader)) {
+            $facetGroups[] = "[\"versions:$minecraftVersion\"]";
+        }
+        $facetGroups[] = "[\"project_type:{$modrinthProjectType}\"]";
+
         $data = [
             'offset' => ($page - 1) * 20,
             'limit' => 20,
-            'facets' => "[[$loaderFacets],[\"versions:$minecraftVersion\"],[\"project_type:{$modrinthProjectType}\"]]",
+            'facets' => '['.implode(',', $facetGroups).']',
         ];
 
         $key = "modrinth_projects:{$modrinthProjectType}:$minecraftVersion:$minecraftLoader:$page";
@@ -284,15 +302,20 @@ class MinecraftModrinthService
         return "modrinth_versions:$projectId:$minecraftVersion:$minecraftLoader";
     }
 
-    /** @return array{game_versions: string, loaders: string} */
+    /** @return array{game_versions?: string, loaders: string} */
     protected function getVersionsQuery(?string $minecraftVersion, string $minecraftLoader): array
     {
         $loaders = implode(',', array_map(fn ($loader) => "\"$loader\"", $this->getCompatibleLoaders($minecraftLoader)));
 
-        return [
-            'game_versions' => "[\"$minecraftVersion\"]",
+        $query = [
             'loaders' => "[$loaders]",
         ];
+
+        if (!$this->isProxyLoader($minecraftLoader)) {
+            $query['game_versions'] = "[\"$minecraftVersion\"]";
+        }
+
+        return $query;
     }
 
     /** @param  array<int, mixed>  $versions */
