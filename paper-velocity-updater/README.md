@@ -22,11 +22,15 @@ A server without any of these variables is left untouched.
    API, or a scheduled task), the plugin intercepts it before it reaches Wings.
 2. If `BUILD_NUMBER` is pinned to a specific number (not `latest`), the server is left alone -
    the admin explicitly chose that build.
-3. Otherwise, the plugin resolves the target Minecraft/Velocity version (or the newest one, if
-   `latest` or invalid) and asks PaperMC for the newest `STABLE` build for it. **The version and
-   build are resolved independently**: pinning `MINECRAFT_VERSION` to e.g. `26.2` with
-   `BUILD_NUMBER` left at `latest` keeps the server on new `26.2` builds forever - it never jumps
-   to `26.3` just because that becomes the newest version.
+3. Otherwise, the plugin resolves the target Minecraft/Velocity version and asks PaperMC for the
+   newest `STABLE` build for it. **The version and build are resolved independently**: pinning
+   `MINECRAFT_VERSION` to e.g. `26.2` with `BUILD_NUMBER` left at `latest` keeps the server on new
+   `26.2` builds forever - it never jumps to `26.3` just because that becomes the newest version.
+   A pinned version is a hard lock: if it can't be positively confirmed against PaperMC's own
+   version list (typo, or PaperMC/the cache being temporarily unavailable), the update is skipped
+   for that cycle rather than falling back to the latest version - a pinned server can only ever
+   move to a version you explicitly asked for. Only leaving the variable at `latest` (or empty)
+   resolves to the newest version.
 4. If that build differs from the one last installed (tracked in a small `.paper-velocity-updater.json`
    marker file in the server's root), the jar is downloaded straight into the server directory
    (via the daemon's file-pull API, with a generous timeout - see below) and the marker is
@@ -79,3 +83,7 @@ you prefer - the settings page just writes to the same place.
   instead of proceeding to start/restart the server: the daemon may still be mid-write on that
   exact jar file, so starting the server anyway could mean running a half-written jar. If that
   happens, the power action itself errors out and the server keeps its previous state - just retry.
+- A pinned version that can't be verified (bad value, or PaperMC/cache unavailable) logs a warning
+  (throttled the same as other failures) so you can spot a typo, but otherwise behaves like any
+  other failed check: the update is skipped, the server starts as-is, and it is never moved to a
+  different version than the one pinned.

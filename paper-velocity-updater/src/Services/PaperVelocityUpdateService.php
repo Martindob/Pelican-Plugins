@@ -10,6 +10,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class PaperVelocityUpdateService
 {
@@ -102,6 +103,16 @@ class PaperVelocityUpdateService
 
             $version = $this->resolveVersion($project, $requestedVersion);
             if ($version === null) {
+                // Only warn when a version was actually pinned - "latest" simply
+                // failing to resolve (e.g. PaperMC unreachable) is already covered
+                // by the exception path below/in fetchVersionGroups().
+                if ($requestedVersion !== null && !$this->isLatest($requestedVersion)) {
+                    $this->logOncePerWindow(
+                        "server:{$server->id}:pinned-version-not-found",
+                        "paper-velocity-updater: server #{$server->id} pins {$project} version \"" . trim($requestedVersion) . '" but it could not be verified against PaperMC - skipping the update check (never falling back to the latest version for a pinned server).'
+                    );
+                }
+
                 return null;
             }
 
@@ -227,17 +238,29 @@ class PaperVelocityUpdateService
     }
 
     /**
-     * Resolves the requested version to a concrete Minecraft/Velocity version string,
-     * falling back to the newest available version - same behaviour as the "Leave at
-     * latest"/"Invalid versions will default to latest" wording shown for these variables.
+     * Resolves the requested version to a concrete Minecraft/Velocity version string.
+     *
+     * Only "latest" (or an empty/missing variable) resolves to the newest available
+     * version. A *pinned* version is a hard lock: if it can't be positively verified
+     * against PaperMC's own version list - because it's genuinely invalid, or
+     * because the API/cache is temporarily unavailable - this returns null rather
+     * than silently falling back to the newest version. Falling back on an
+     * inconclusive check would mean a single transient PaperMC hiccup could bump a
+     * pinned server onto a version its admin never asked for, which defeats the
+     * entire point of pinning one. The caller treats null as "skip this update
+     * cycle", not as "use latest".
      */
     private function resolveVersion(string $project, ?string $requestedVersion): ?string
     {
-        if (!$this->isLatest($requestedVersion) && $this->versionExists($project, $requestedVersion)) {
-            return $requestedVersion;
+        if ($this->isLatest($requestedVersion)) {
+            return $this->resolveLatestVersion($project);
         }
 
-        return $this->resolveLatestVersion($project);
+        // isLatest() already returned false for null, so $requestedVersion is a
+        // real string here; the cast just keeps static analysis happy about it.
+        $version = trim((string) $requestedVersion);
+
+        return $this->versionExists($project, $version) ? $version : null;
     }
 
     /** @return array<string, array<int, string>> */
@@ -336,6 +359,20 @@ class PaperVelocityUpdateService
 
         if ($minutes <= 0 || Cache::add("paper-velocity-updater:reported:$key", true, now()->addMinutes($minutes))) {
             report($exception);
+        }
+    }
+
+    /**
+     * Same throttling as reportOncePerWindow(), for a plain warning message rather
+     * than an exception (e.g. a pinned version that doesn't exist - not a crash,
+     * but something the admin should be told about, not just silently skipped).
+     */
+    private function logOncePerWindow(string $key, string $message): void
+    {
+        $minutes = (int) config('paper-velocity-updater.report_throttle_minutes', 30);
+
+        if ($minutes <= 0 || Cache::add("paper-velocity-updater:reported:$key", true, now()->addMinutes($minutes))) {
+            Log::warning($message);
         }
     }
 
