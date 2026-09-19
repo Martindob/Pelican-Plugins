@@ -10,7 +10,6 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 
 class PaperVelocityUpdateService
 {
@@ -103,16 +102,6 @@ class PaperVelocityUpdateService
 
             $version = $this->resolveVersion($project, $requestedVersion);
             if ($version === null) {
-                // Only warn when a version was actually pinned - "latest" simply
-                // failing to resolve (e.g. PaperMC unreachable) is already covered
-                // by the exception path below/in fetchVersionGroups().
-                if ($requestedVersion !== null && !$this->isLatest($requestedVersion)) {
-                    $this->logOncePerWindow(
-                        "server:{$server->id}:pinned-version-not-found",
-                        "paper-velocity-updater: server #{$server->id} pins {$project} version \"" . trim($requestedVersion) . '" but it could not be verified against PaperMC - skipping the update check (never falling back to the latest version for a pinned server).'
-                    );
-                }
-
                 return null;
             }
 
@@ -359,20 +348,6 @@ class PaperVelocityUpdateService
 
         if ($minutes <= 0 || Cache::add("paper-velocity-updater:reported:$key", true, now()->addMinutes($minutes))) {
             report($exception);
-        }
-    }
-
-    /**
-     * Same throttling as reportOncePerWindow(), for a plain warning message rather
-     * than an exception (e.g. a pinned version that doesn't exist - not a crash,
-     * but something the admin should be told about, not just silently skipped).
-     */
-    private function logOncePerWindow(string $key, string $message): void
-    {
-        $minutes = (int) config('paper-velocity-updater.report_throttle_minutes', 30);
-
-        if ($minutes <= 0 || Cache::add("paper-velocity-updater:reported:$key", true, now()->addMinutes($minutes))) {
-            Log::warning($message);
         }
     }
 

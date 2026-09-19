@@ -1,7 +1,7 @@
 # Paper & Velocity Updater (by Martindob)
 
-Automatically keeps Paper and Velocity servers up to date: every time a server is started or
-restarted, the plugin checks [PaperMC's downloads service](https://docs.papermc.io/misc/downloads-service/)
+Automatically keeps Paper and Velocity servers up to date: every time a server is started,
+restarted, or reinstalled, the plugin checks [PaperMC's downloads service](https://docs.papermc.io/misc/downloads-service/)
 for a newer build, downloads it and replaces the server jar *before* the server actually starts.
 
 ## Setup
@@ -18,8 +18,8 @@ A server without any of these variables is left untouched.
 
 ## How it works
 
-1. When a `start` or `restart` power action is sent to a server (from the console, the client
-   API, or a scheduled task), the plugin intercepts it before it reaches Wings.
+1. When a `start`/`restart` power action or a reinstall is sent to a server (from the console,
+   the client API, or a scheduled task), the plugin intercepts it before it reaches Wings.
 2. If `BUILD_NUMBER` is pinned to a specific number (not `latest`), the server is left alone -
    the admin explicitly chose that build.
 3. Otherwise, the plugin resolves the target Minecraft/Velocity version and asks PaperMC for the
@@ -65,25 +65,27 @@ you prefer - the settings page just writes to the same place.
   entirely once the marker file shows the currently installed build is already the target one -
   so it never re-downloads the same jar over and over.
 - Firing power actions in quick succession (double-clicking restart, hitting start right after a
-  restart, force-stopping and immediately starting again, ...) is safe too. `start`/`restart` share
-  a per-server lock: a second `start`/`restart` that arrives while the first is still checking or
-  downloading *waits* for it to finish rather than racing ahead - so it can never send its own
-  power signal while the daemon might still be mid-write on the jar the server is about to run.
-  `stop`/`kill` are untouched by this plugin entirely (it only hooks `start`/`restart`), so they're
-  always sent immediately and never wait on anything - they don't touch the jar file either way.
+  restart, force-stopping and immediately starting again, reinstalling right after a restart, ...)
+  is safe too. `start`/`restart`/reinstall all share one per-server lock: a second one that arrives
+  while the first is still checking or downloading *waits* for it to finish rather than racing
+  ahead - so it can never proceed while the daemon might still be mid-write on the jar the server
+  is about to run. `stop`/`kill` are untouched by this plugin entirely, so they're always sent
+  immediately and never wait on anything - they don't touch the jar file either way.
 - This only runs for power actions sent through the panel (console, client API, scheduled
   tasks). If Wings itself restarts a crashed server without asking the panel, this hook is not
   triggered.
 - Only `STABLE` channel builds are used for automatic updates. If a pinned version only has
   `BETA`/`ALPHA` builds, the newest available build is used instead.
-- A failed *check* (e.g. PaperMC being unreachable) never blocks the server from starting - it
-  just starts on the previously installed jar (see the failure log throttle setting above for how
-  that gets logged without spamming). A failed *download*, or waiting too long for another
-  in-flight check/download on the same server to finish, deliberately fails the whole power action
-  instead of proceeding to start/restart the server: the daemon may still be mid-write on that
-  exact jar file, so starting the server anyway could mean running a half-written jar. If that
-  happens, the power action itself errors out and the server keeps its previous state - just retry.
-- A pinned version that can't be verified (bad value, or PaperMC/cache unavailable) logs a warning
-  (throttled the same as other failures) so you can spot a typo, but otherwise behaves like any
-  other failed check: the update is skipped, the server starts as-is, and it is never moved to a
-  different version than the one pinned.
+- A failed *check* (e.g. PaperMC being unreachable, or a pinned version that can't be verified)
+  never blocks the server from starting and never logs anything beyond the usual throttled failure
+  entry (see above) - it just starts/reinstalls on the previously installed jar. A pinned version
+  that can't be confirmed is treated exactly the same way: the update is silently skipped for that
+  cycle, never substituted with a different version.
+- A failed *download*, or waiting too long for another in-flight check/download on the same server
+  to finish, deliberately fails the whole power action/reinstall instead of proceeding: the daemon
+  may still be mid-write on that exact jar file, so proceeding anyway could mean running a
+  half-written jar. If that happens, the action itself errors out and the server keeps its
+  previous state - just retry.
+- Reinstalling re-runs the egg's own install script (which may already handle the pinned
+  version/build itself); this plugin's check runs first regardless, so the pinned version is
+  downloaded consistently whether or not the egg's own script does the same.
