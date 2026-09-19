@@ -45,6 +45,16 @@ class PaperVelocityUpdateService
             return;
         }
 
+        // Cheap, in-memory check done *before* touching the cache/lock at all.
+        // Most restarts on a panel are not for a Paper/Velocity server, and
+        // those must not pay for a distributed lock acquisition (and the
+        // variables eager-load) on every single restart of every server on the
+        // whole panel just to find out this plugin has nothing to do.
+        $server->loadMissing('variables');
+        if ($this->detectProject($server) === null) {
+            return;
+        }
+
         // Two "start"/"restart" clicks fired in quick succession (a double click, or
         // restart followed immediately by start) must never let the second one race
         // ahead of the first's download: skipping the check outright when the lock
@@ -56,15 +66,8 @@ class PaperVelocityUpdateService
         // here is deliberately not caught, for the same reason a download failure
         // isn't: proceeding without knowing whether the other write finished is
         // exactly the risk this is meant to avoid.
-        //
-        // The lock's own TTL and the wait timeout are the same value on purpose:
-        // a waiter must never give up before a legitimate holder's own budget
-        // runs out, or it would abort thinking something is stuck when the first
-        // request is simply still within its allowed time.
-        $ttl = $this->lockTtlSeconds();
-
-        Cache::lock("paper-velocity-updater:server:{$server->id}", $ttl)
-            ->block($ttl, function () use ($server) {
+        Cache::lock("paper-velocity-updater:server:{$server->id}", $this->lockTtlSeconds())
+            ->block($this->lockWaitSeconds(), function () use ($server) {
                 $plan = $this->plan($server);
                 if ($plan !== null) {
                     $this->applyPlan($server, $plan);
@@ -73,7 +76,7 @@ class PaperVelocityUpdateService
     }
 
     /**
-     * How long the per-server lock is held for/waited on. This has to cover the
+     * How long a legitimate lock holder may run for. This has to cover the
      * *entire* critical section, not just the download: the two PaperMC lookups
      * and the two daemon reads (state file, directory listing) in plan() each
      * have their own independent timeout and run before the download even
@@ -87,12 +90,29 @@ class PaperVelocityUpdateService
     }
 
     /**
+     * How long a *waiter* blocks before giving up - deliberately much shorter
+     * than lockTtlSeconds(), and not tied to the download timeout at all. This
+     * runs synchronously inside the request handling the power action, so
+     * waiting anywhere near as long as a full download could take would hit
+     * the web server's/reverse proxy's own request timeout (commonly 30-60s)
+     * long before our own timeout would - turning what's meant to be a
+     * graceful wait-then-proceed into a raw, unhandled gateway timeout for the
+     * user instead of the clean, retryable error a LockTimeoutException here
+     * becomes (see power(), which converts it to a ConnectionException the
+     * panel already shows a proper notification for).
+     */
+    private function lockWaitSeconds(): int
+    {
+        return 10;
+    }
+
+    /**
      * Works out whether an update is needed and, if so, what to download. Every
      * failure here (PaperMC or the daemon being unreachable, a bad response, ...)
      * is safe to swallow: nothing has been written yet, so the server can just
      * start on whatever jar is already on disk.
      *
-     * @return array{fileRepository: DaemonFileRepository, project: string, version: string, build: int, jar: string, url: string}|null
+     * @return array{fileRepository: DaemonFileRepository, project: string, version: string, build: int, jar: string, url: string, confirmedKey: string}|null
      */
     private function plan(Server $server): ?array
     {
@@ -136,6 +156,19 @@ class PaperVelocityUpdateService
                 return null;
             }
 
+            $confirmedKey = $this->confirmedCacheKey($server->id, $project, $version, $build['id'], $jarFile);
+
+            // Once a restart has actually confirmed this exact build is already
+            // installed and present on disk, later restarts within the same
+            // version/build cache window skip the daemon round-trips entirely
+            // instead of re-reading the marker file and re-listing the server
+            // directory every single time - restarting an already up to date
+            // server repeatedly (e.g. while configuring it) then costs zero
+            // daemon calls instead of two.
+            if (Cache::has($confirmedKey)) {
+                return null;
+            }
+
             $fileRepository = app(DaemonFileRepository::class)->setServer($server);
 
             $state = $this->readState($fileRepository, $server->id);
@@ -147,6 +180,8 @@ class PaperVelocityUpdateService
                 && $this->jarExists($fileRepository, $jarFile);
 
             if ($upToDate) {
+                Cache::put($confirmedKey, true, now()->addMinutes($this->cacheMinutes()));
+
                 return null;
             }
 
@@ -157,6 +192,7 @@ class PaperVelocityUpdateService
                 'build' => $build['id'],
                 'jar' => $jarFile,
                 'url' => $download['url'],
+                'confirmedKey' => $confirmedKey,
             ];
         } catch (Exception $exception) {
             // Someone restarting a server repeatedly (e.g. while still configuring
@@ -178,7 +214,7 @@ class PaperVelocityUpdateService
      * but a ~50-60MB Paper/Velocity jar can easily take longer than that,
      * especially on a slower node.
      *
-     * @param  array{fileRepository: DaemonFileRepository, project: string, version: string, build: int, jar: string, url: string}  $plan
+     * @param  array{fileRepository: DaemonFileRepository, project: string, version: string, build: int, jar: string, url: string, confirmedKey: string}  $plan
      *
      * @throws Exception
      */
@@ -193,6 +229,8 @@ class PaperVelocityUpdateService
                 'foreground' => true,
             ])
             ->throw();
+
+        Cache::put($plan['confirmedKey'], true, now()->addMinutes($this->cacheMinutes()));
 
         try {
             $this->writeState($plan['fileRepository'], [
@@ -218,18 +256,43 @@ class PaperVelocityUpdateService
         return max(60, (int) config('paper-velocity-updater.download_timeout_seconds', 300));
     }
 
-    /** Detects whether this server is a Paper or Velocity server from its startup variables. */
+    private function confirmedCacheKey(int $serverId, string $project, string $version, int $build, string $jarFile): string
+    {
+        return "paper-velocity-updater:confirmed:$serverId:$project:$version:$build:$jarFile";
+    }
+
+    /**
+     * Detects whether this server is a Paper or Velocity server from its
+     * startup variables. Requires BUILD_NUMBER to be defined alongside the
+     * version variable: MINECRAFT_VERSION/MC_VERSION alone is not unique to
+     * Paper - the sibling minecraft-modrinth plugin (and Fabric/Forge/Quilt/
+     * NeoForge eggs generally) reads the exact same variable for modded
+     * loaders, which have no concept of a PaperMC "build number". Without this
+     * check, a modded server whose egg happens to define MINECRAFT_VERSION but
+     * no BUILD_NUMBER would be misidentified as Paper and have its actual jar
+     * overwritten with a vanilla Paper one.
+     */
     private function detectProject(Server $server): ?string
     {
+        if (!$this->hasVariable($server, 'BUILD_NUMBER')) {
+            return null;
+        }
+
         foreach (self::PROJECT_VERSION_VARIABLES as $project => $variableNames) {
             foreach ($variableNames as $variableName) {
-                if ($server->variables->firstWhere('env_variable', $variableName)) {
+                if ($this->hasVariable($server, $variableName)) {
                     return $project;
                 }
             }
         }
 
         return null;
+    }
+
+    /** Whether the egg defines this variable at all, regardless of its value. */
+    private function hasVariable(Server $server, string $name): bool
+    {
+        return $server->variables->firstWhere('env_variable', $name) !== null;
     }
 
     private function getVariable(Server $server, string $name): ?string
@@ -296,16 +359,37 @@ class PaperVelocityUpdateService
         );
     }
 
+    /**
+     * Picks the newest version that looks like an actual release, skipping
+     * snapshot/pre-release versions. PaperMC's own version lists can put these
+     * ahead of the release they precede - live example from the Fill API:
+     * Velocity's "4.0.0" group lists "4.2.1-SNAPSHOT" before the actual latest
+     * release "4.2.0" - and a snapshot's own build can itself be labelled
+     * channel "STABLE" too, so neither list order nor build channel alone can
+     * be trusted to mean "the latest real release". A server left at
+     * VELOCITY_VERSION/MINECRAFT_VERSION=latest must land on 4.2.0, not the
+     * in-development snapshot ahead of it.
+     */
     private function resolveLatestVersion(string $project): ?string
     {
-        $groups = $this->fetchVersionGroups($project);
-        $firstGroup = reset($groups);
+        foreach ($this->fetchVersionGroups($project) as $group) {
+            if (!is_array($group)) {
+                continue;
+            }
 
-        if (!is_array($firstGroup) || empty($firstGroup)) {
-            return null;
+            foreach ($group as $version) {
+                if (is_string($version) && $this->looksLikeStableVersion($version)) {
+                    return $version;
+                }
+            }
         }
 
-        return reset($firstGroup);
+        return null;
+    }
+
+    private function looksLikeStableVersion(string $version): bool
+    {
+        return preg_match('/-(snapshot|rc|pre|alpha|beta)/i', $version) !== 1;
     }
 
     private function versionExists(string $project, ?string $version): bool
