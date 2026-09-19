@@ -2,6 +2,7 @@
 
 namespace Martindob\PaperVelocityUpdater\Services;
 
+use App\Enums\ContainerStatus;
 use App\Models\Server;
 use App\Repositories\Daemon\DaemonFileRepository;
 use Exception;
@@ -143,6 +144,31 @@ class PaperVelocityUpdateService
             // it with a stock PaperMC jar would silently undo that choice on
             // every restart.
             if ($this->getVariable($server, 'DL_PATH') !== null) {
+                return null;
+            }
+
+            // Wings writes a replacement jar in place (truncate + overwrite the
+            // same inode, not a write-then-atomic-rename - confirmed directly
+            // against its source: Filesystem.Write() opens the existing file
+            // with O_TRUNC). That's harmless for Paper: Paperclip only reads
+            // server.jar for a few seconds at boot to patch/cache the real
+            // server jar under cache/, then runs entirely from that cache for
+            // the rest of the process's life, so truncating server.jar underneath
+            // an already-running Paper process doesn't touch anything it still
+            // reads. Velocity has no such split - it's launched directly as
+            // `java -jar velocity.jar`, so the JVM's own classloader keeps
+            // velocity.jar open and can still lazily read a class from it at any
+            // point for as long as the process runs. Overwriting it while that
+            // process is still up risks a corrupt read (a class load failing
+            // mid-truncate) crashing an otherwise healthy, currently-running
+            // proxy - which is strictly worse than just leaving it on its
+            // current build for one more restart. So for Velocity specifically,
+            // only swap the jar in place when the server is confirmed to
+            // already be stopped; a Velocity restart of a still-running proxy
+            // simply skips the update this cycle and picks it up on a later
+            // check instead. Paper is unaffected and keeps updating on every
+            // restart regardless of whether it's currently running.
+            if ($project === 'velocity' && $this->isRunning($server)) {
                 return null;
             }
 
@@ -378,6 +404,24 @@ class PaperVelocityUpdateService
     private function isLatest(?string $value): bool
     {
         return $value === null || strtolower(trim($value)) === 'latest';
+    }
+
+    /**
+     * Whether the server's container is (or might still be) running, checked
+     * conservatively: anything other than one of a few definitively-stopped
+     * states counts as "running" here, including an inconclusive/ambiguous
+     * result (e.g. the daemon call timing out) - reusing the same panel-wide
+     * 15 second status cache Server::retrieveStatus() already maintains, so
+     * this is effectively free on top of a normal restart.
+     */
+    private function isRunning(Server $server): bool
+    {
+        return !in_array($server->retrieveStatus(), [
+            ContainerStatus::Offline,
+            ContainerStatus::Exited,
+            ContainerStatus::Dead,
+            ContainerStatus::Created,
+        ], true);
     }
 
     /** @return array<string, array<int, string>> */

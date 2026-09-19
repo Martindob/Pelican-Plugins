@@ -64,7 +64,8 @@ every restart would silently undo that choice.
    below). Only a single rolling `.old` backup is ever kept - any previous one is deleted first, so
    this never accumulates extra files or grows disk usage over time. The marker is updated last -
    all before the power signal is forwarded, so the server always boots on the version it just
-   downloaded.
+   downloaded. **Exception:** for Velocity, this jar swap is skipped for that cycle if the proxy is
+   currently confirmed running - see the note on this below.
 
 ## Configuration
 
@@ -137,6 +138,22 @@ Only an actual pending update (or that periodic re-verification) touches the dae
   error instead of a broken page - the server keeps its previous state either way, just retry.
 - This plugin only hooks `start`/`restart` power actions - a reinstall runs the egg's own install
   script as usual, unaffected by this plugin.
+- **Velocity only updates while stopped.** Wings writes the replacement jar in place - it truncates
+  and overwrites the existing file's contents directly rather than writing a new file and atomically
+  renaming it over the old one (checked directly against Wings' own `Filesystem.Write()`). For Paper
+  this is harmless even while the old process is still running: Paperclip (`server.jar`) only reads
+  itself for a few seconds at boot to patch and cache the real server jar under `cache/`, then runs
+  entirely from that cache for the rest of the process's life, so it never touches `server.jar` again
+  until its *next* launch. Velocity has no such split - it's launched directly as `java -jar
+  velocity.jar`, so the JVM keeps that exact file open for as long as the process runs and can still
+  lazily load a class from it at any point. Overwriting it while an already-running proxy might still
+  read from it risks a corrupt read crashing an otherwise healthy proxy - clearly worse than just
+  leaving it on its current build for one more restart. So a `restart` sent to a Velocity proxy that's
+  still running when the check happens (the common case for a scheduled restart) skips the update for
+  that cycle and simply restarts on the current build; the update is picked up automatically on a
+  later check once the proxy is confirmed stopped (a manual `start` after a `stop`, or a `restart`
+  that happens to catch it already offline/crashed). Paper is not affected by this and keeps updating
+  on every restart regardless of whether it's currently running.
 - On `latest`, this plugin can resolve to a different version than a manual **Reinstall** would at
   the same moment. Checked directly against the official install scripts: they resolve "latest
   version" as simply the first entry PaperMC's API returns, with no channel check at all, so if the
