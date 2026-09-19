@@ -50,9 +50,9 @@ class PaperVelocityUpdaterPlugin implements HasPluginSettings, Plugin
                 ->default(fn () => config('paper-velocity-updater.cache_minutes')),
             TextInput::make('download_timeout_seconds')
                 ->label('Download timeout (seconds)')
-                ->helperText('How long to wait for the daemon to download and write the jar file. Raise this if your nodes have a slow link to PaperMC\'s CDN.')
+                ->helperText('How long to wait for the daemon to download and write the jar file. Raise this if your nodes have a slow link to PaperMC\'s CDN. Kept well above the daemon client\'s own 15 second default on purpose - a ~50-60MB jar realistically needs more than that.')
                 ->numeric()
-                ->minValue(15)
+                ->minValue(60)
                 ->required()
                 ->default(fn () => config('paper-velocity-updater.download_timeout_seconds')),
             TextInput::make('report_throttle_minutes')

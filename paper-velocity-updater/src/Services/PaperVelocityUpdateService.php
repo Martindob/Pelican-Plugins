@@ -56,13 +56,34 @@ class PaperVelocityUpdateService
         // here is deliberately not caught, for the same reason a download failure
         // isn't: proceeding without knowing whether the other write finished is
         // exactly the risk this is meant to avoid.
-        Cache::lock("paper-velocity-updater:server:{$server->id}", $this->downloadTimeoutSeconds() + 60)
-            ->block($this->downloadTimeoutSeconds() + 30, function () use ($server) {
+        //
+        // The lock's own TTL and the wait timeout are the same value on purpose:
+        // a waiter must never give up before a legitimate holder's own budget
+        // runs out, or it would abort thinking something is stuck when the first
+        // request is simply still within its allowed time.
+        $ttl = $this->lockTtlSeconds();
+
+        Cache::lock("paper-velocity-updater:server:{$server->id}", $ttl)
+            ->block($ttl, function () use ($server) {
                 $plan = $this->plan($server);
                 if ($plan !== null) {
                     $this->applyPlan($server, $plan);
                 }
             });
+    }
+
+    /**
+     * How long the per-server lock is held for/waited on. This has to cover the
+     * *entire* critical section, not just the download: the two PaperMC lookups
+     * and the two daemon reads (state file, directory listing) in plan() each
+     * have their own independent timeout and run before the download even
+     * starts, and writeState() is another daemon call after it. The fixed 180s
+     * margin comfortably covers all of that on top of the configurable download
+     * timeout, regardless of how low the latter is set.
+     */
+    private function lockTtlSeconds(): int
+    {
+        return $this->downloadTimeoutSeconds() + 180;
     }
 
     /**
@@ -191,7 +212,10 @@ class PaperVelocityUpdateService
 
     private function downloadTimeoutSeconds(): int
     {
-        return (int) config('paper-velocity-updater.download_timeout_seconds', 300);
+        // Clamped here too, not just in the settings form's minValue(60): a
+        // value edited directly in .env could otherwise bypass that and bring
+        // back the daemon client's own too-short 15 second default.
+        return max(60, (int) config('paper-velocity-updater.download_timeout_seconds', 300));
     }
 
     /** Detects whether this server is a Paper or Velocity server from its startup variables. */
@@ -302,7 +326,13 @@ class PaperVelocityUpdateService
     /** @return array{id: int, channel: string, downloads: array<string, array{name: string, url: string}>}|null */
     private function resolveLatestBuild(string $project, string $version): ?array
     {
-        return cache()->remember(
+        // cache()->remember() can't distinguish "cached null" from "cache miss"
+        // (it checks the value with is_null()), so a closure returning null on
+        // failure would never actually be cached - every restart during a
+        // PaperMC outage would re-hit the API instead of reusing a cached
+        // failure. false is used as the "nothing found" sentinel instead, since
+        // that a remember() call can actually cache.
+        $build = cache()->remember(
             "paper-velocity-updater:build:$project:$version",
             now()->addMinutes($this->cacheMinutes()),
             function () use ($project, $version) {
@@ -311,11 +341,11 @@ class PaperVelocityUpdateService
                 } catch (Exception $exception) {
                     $this->reportOncePerWindow("build:$project:$version", $exception);
 
-                    return null;
+                    return false;
                 }
 
                 if (!is_array($builds) || empty($builds)) {
-                    return null;
+                    return false;
                 }
 
                 // The API returns builds newest first; prefer a stable one but fall
@@ -324,12 +354,14 @@ class PaperVelocityUpdateService
                 $candidate = $stable[0] ?? $builds[0];
 
                 if (!is_array($candidate) || !isset($candidate['id'])) {
-                    return null;
+                    return false;
                 }
 
                 return $candidate;
             }
         );
+
+        return is_array($build) ? $build : null;
     }
 
     private function cacheMinutes(): int

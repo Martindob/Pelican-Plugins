@@ -47,7 +47,8 @@ Under **Admin → Plugins → Paper & Velocity Updater → Settings** in the pan
 - **Download timeout (seconds)** - overrides the daemon client's normal 15 second timeout
   (`panel.guzzle.timeout`) for the actual jar download/write, which is far too short for a
   ~50-60MB Paper/Velocity jar. Raise it if your nodes have a slow link to PaperMC's CDN
-  (default `300`).
+  (default `300`, minimum `60` - enforced even if set directly in `.env` - so it can't be set
+  back down to something too short for a real download).
 - **Failure log throttle (minutes)** - the same failure (PaperMC or the daemon being
   unreachable, etc.) for a given server is only logged once per this many minutes, no matter how
   many times you restart the server in the meantime (e.g. while still configuring it). Set to `0`
@@ -84,7 +85,8 @@ you prefer - the settings page just writes to the same place.
 - A failed *download*, or waiting too long for another in-flight check/download on the same server
   to finish, deliberately fails the whole power action instead of proceeding: the daemon may still
   be mid-write on that exact jar file, so proceeding anyway could mean running a half-written jar.
-  If that happens, the power action itself errors out and the server keeps its previous state -
-  just retry.
+  Whatever actually failed is surfaced as the same `ConnectionException` the panel already shows a
+  proper error notification for elsewhere, so this shows up as a normal "couldn't reach the node"
+  error instead of a broken page - the server keeps its previous state either way, just retry.
 - This plugin only hooks `start`/`restart` power actions - a reinstall runs the egg's own install
   script as usual, unaffected by this plugin.
