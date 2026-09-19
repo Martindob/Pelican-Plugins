@@ -134,6 +134,18 @@ class PaperVelocityUpdateService
                 return null;
             }
 
+            // DL_PATH (present on both official eggs) tells the egg's own install
+            // script to download from a custom URL instead of resolving anything
+            // through PaperMC - used for mirrors, patched/forked builds, or a
+            // private build server. If an admin has set it, this server has
+            // opted out of PaperMC-based resolution entirely, and this plugin has
+            // no way to know what that custom URL should resolve to - overwriting
+            // it with a stock PaperMC jar would silently undo that choice on
+            // every restart.
+            if ($this->getVariable($server, 'DL_PATH') !== null) {
+                return null;
+            }
+
             $jarFile = $this->getVariable($server, 'SERVER_JARFILE') ?? ($project === 'velocity' ? 'velocity.jar' : 'server.jar');
 
             $requestedVersion = null;
@@ -242,6 +254,15 @@ class PaperVelocityUpdateService
      */
     private function applyPlan(Server $server, array $plan): void
     {
+        // Mirrors what the official Paper/Velocity install scripts themselves
+        // do before downloading a new jar ("mv $SERVER_JARFILE $SERVER_JARFILE.old"),
+        // giving an easy manual recovery path if a downloaded jar ever turns
+        // out to be bad. Best-effort and never allowed to block the actual
+        // update: a first-ever install (no existing jar to rename) or any
+        // other rename failure is swallowed and the update proceeds exactly
+        // as it would without a backup.
+        $this->backupExistingJar($server, $plan['fileRepository'], $plan['jar']);
+
         $plan['fileRepository']->getHttpClient()
             ->timeout(max((int) config('panel.guzzle.timeout'), $this->downloadTimeoutSeconds()))
             ->post("/api/servers/{$server->uuid}/files/pull", [
@@ -267,6 +288,30 @@ class PaperVelocityUpdateService
             // marker only means the next restart re-verifies (and, worst case,
             // re-downloads) unnecessarily - not worth failing the power action over.
             $this->reportOncePerWindow("server:{$server->id}:write-state", $exception);
+        }
+    }
+
+    /**
+     * Only ever keeps a single rolling "<jarfile>.old" backup - never a new
+     * file per update - so this can't grow disk usage over time. Any previous
+     * backup is deleted first (silently, since not having one yet is the
+     * normal case for the first update) before renaming the current jar into
+     * its place.
+     */
+    private function backupExistingJar(Server $server, DaemonFileRepository $fileRepository, string $jarFile): void
+    {
+        try {
+            try {
+                $fileRepository->deleteFiles('/', ["$jarFile.old"]);
+            } catch (Exception) {
+                // Nothing to delete yet - expected on the first ever update.
+            }
+
+            $fileRepository->renameFiles('/', [
+                ['from' => $jarFile, 'to' => "$jarFile.old"],
+            ]);
+        } catch (Exception $exception) {
+            $this->reportOncePerWindow("server:{$server->id}:backup-jar", $exception);
         }
     }
 

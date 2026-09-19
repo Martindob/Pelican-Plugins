@@ -19,6 +19,17 @@ and `BUILD_NUMBER` - a version variable alone is not enough, since e.g. Fabric/F
 (handled by the sibling `minecraft-modrinth` plugin, if installed) can define the same
 `MINECRAFT_VERSION`/`MC_VERSION` variable without any concept of a PaperMC build number. Any
 other server (no matching variables at all) is left completely untouched, with no overhead.
+(Checked directly against the official
+[Paper](https://github.com/pelican-eggs/minecraft/blob/main/java/paper/egg-paper.yaml) and
+[Velocity](https://github.com/pelican-eggs/minecraft/blob/main/proxy/java/velocity/egg-velocity.json)
+egg definitions - these are the exact variable names, defaults and egg tags they use.)
+
+If the egg also defines `DL_PATH` (both official eggs do, hidden/non-user-viewable by default)
+and it's been set to something, this plugin leaves the server alone entirely. `DL_PATH` tells the
+egg's own install script to download from a custom URL instead of resolving anything through
+PaperMC - used for mirrors, patched/forked builds, or a private build server - and this plugin has
+no way to know what that custom URL should resolve to. Overwriting it with a stock PaperMC jar on
+every restart would silently undo that choice.
 
 ## How it works
 
@@ -46,10 +57,14 @@ other server (no matching variables at all) is left completely untouched, with n
    has a `STABLE` build, checking up to 10 versions before giving up - matching what PaperMC's own
    downloads pages show for both projects, not a naming guess.
 4. If that build differs from the one last installed (tracked in a small `.paper-velocity-updater.json`
-   marker file in the server's root), the jar is downloaded straight into the server directory
-   (via the daemon's file-pull API, with a generous timeout - see below) and the marker is
-   updated - all before the power signal is forwarded, so the server always boots on the version
-   it just downloaded.
+   marker file in the server's root), the existing jar is renamed to `<jarfile>.old` (best-effort,
+   mirroring what the official install scripts themselves do before downloading a new jar - an easy
+   manual recovery path if a downloaded jar ever turns out to be bad) and the new one is downloaded
+   straight into the server directory (via the daemon's file-pull API, with a generous timeout - see
+   below). Only a single rolling `.old` backup is ever kept - any previous one is deleted first, so
+   this never accumulates extra files or grows disk usage over time. The marker is updated last -
+   all before the power signal is forwarded, so the server always boots on the version it just
+   downloaded.
 
 ## Configuration
 
@@ -122,6 +137,15 @@ Only an actual pending update (or that periodic re-verification) touches the dae
   error instead of a broken page - the server keeps its previous state either way, just retry.
 - This plugin only hooks `start`/`restart` power actions - a reinstall runs the egg's own install
   script as usual, unaffected by this plugin.
+- On `latest`, this plugin can resolve to a different version than a manual **Reinstall** would at
+  the same moment. Checked directly against the official install scripts: they resolve "latest
+  version" as simply the first entry PaperMC's API returns, with no channel check at all, so if the
+  newest version listed currently only has `ALPHA`/`BETA` builds (as Paper's `26.3` does at the time
+  of writing), a reinstall would install that. This plugin deliberately does not: since it runs
+  automatically and unattended against servers that are already up, it verifies a `STABLE` build
+  actually exists first (see above) rather than taking whatever's newest at face value - the same
+  standard PaperMC's own downloads pages and downloads-service docs hold themselves to, just not
+  (yet) reflected in the install scripts.
 
 > [!NOTE]
 > PaperMC's own [downloads service documentation](https://docs.papermc.io/misc/downloads-service/)
