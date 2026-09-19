@@ -17,6 +17,9 @@ class PaperVelocityUpdateService
 
     private const FILL_BASE_URL = 'https://fill.papermc.io/v3';
 
+    /** How many versions resolveLatestStable() will check before giving up. */
+    private const MAX_LATEST_VERSION_CANDIDATES = 10;
+
     /** Egg variable name(s) that identify a project and hold its target version. */
     private const PROJECT_VERSION_VARIABLES = [
         'paper' => ['MINECRAFT_VERSION', 'MC_VERSION'],
@@ -141,14 +144,33 @@ class PaperVelocityUpdateService
                 }
             }
 
-            $version = $this->resolveVersion($project, $requestedVersion);
-            if ($version === null) {
-                return null;
-            }
+            // A pinned version is a hard lock: if it can't be positively
+            // verified against PaperMC's own version list - genuinely invalid,
+            // or the API/cache being temporarily unavailable - this skips the
+            // update rather than silently falling back to "latest". Falling
+            // back on an inconclusive check would mean a single transient
+            // PaperMC hiccup could bump a pinned server onto a version its
+            // admin never asked for, which defeats the entire point of
+            // pinning one.
+            if ($this->isLatest($requestedVersion)) {
+                $resolved = $this->resolveLatestStable($project);
+                if ($resolved === null) {
+                    return null;
+                }
 
-            $build = $this->resolveLatestBuild($project, $version);
-            if ($build === null) {
-                return null;
+                $version = $resolved['version'];
+                $build = $resolved['build'];
+            } else {
+                $version = trim((string) $requestedVersion);
+
+                if (!$this->versionExists($project, $version)) {
+                    return null;
+                }
+
+                $build = $this->resolveBuildForPinnedVersion($project, $version);
+                if ($build === null) {
+                    return null;
+                }
             }
 
             $download = $build['downloads']['server:default'] ?? null;
@@ -313,32 +335,6 @@ class PaperVelocityUpdateService
         return $value === null || strtolower(trim($value)) === 'latest';
     }
 
-    /**
-     * Resolves the requested version to a concrete Minecraft/Velocity version string.
-     *
-     * Only "latest" (or an empty/missing variable) resolves to the newest available
-     * version. A *pinned* version is a hard lock: if it can't be positively verified
-     * against PaperMC's own version list - because it's genuinely invalid, or
-     * because the API/cache is temporarily unavailable - this returns null rather
-     * than silently falling back to the newest version. Falling back on an
-     * inconclusive check would mean a single transient PaperMC hiccup could bump a
-     * pinned server onto a version its admin never asked for, which defeats the
-     * entire point of pinning one. The caller treats null as "skip this update
-     * cycle", not as "use latest".
-     */
-    private function resolveVersion(string $project, ?string $requestedVersion): ?string
-    {
-        if ($this->isLatest($requestedVersion)) {
-            return $this->resolveLatestVersion($project);
-        }
-
-        // isLatest() already returned false for null, so $requestedVersion is a
-        // real string here; the cast just keeps static analysis happy about it.
-        $version = trim((string) $requestedVersion);
-
-        return $this->versionExists($project, $version) ? $version : null;
-    }
-
     /** @return array<string, array<int, string>> */
     private function fetchVersionGroups(string $project): array
     {
@@ -360,36 +356,52 @@ class PaperVelocityUpdateService
     }
 
     /**
-     * Picks the newest version that looks like an actual release, skipping
-     * snapshot/pre-release versions. PaperMC's own version lists can put these
-     * ahead of the release they precede - live example from the Fill API:
-     * Velocity's "4.0.0" group lists "4.2.1-SNAPSHOT" before the actual latest
-     * release "4.2.0" - and a snapshot's own build can itself be labelled
-     * channel "STABLE" too, so neither list order nor build channel alone can
-     * be trusted to mean "the latest real release". A server left at
-     * VELOCITY_VERSION/MINECRAFT_VERSION=latest must land on 4.2.0, not the
-     * in-development snapshot ahead of it.
+     * Resolves "latest" to the newest version that actually has a
+     * STABLE-channel build, returning both together.
+     *
+     * Version *names* are not a reliable stability signal, verified live
+     * against the Fill API: Paper's own "26.3" is a perfectly clean version
+     * string with no snapshot/rc/pre suffix, yet every one of its builds is
+     * currently channel ALPHA, while every "26.2" build is STABLE - matching
+     * papermc.io/downloads/paper's own "Latest Stable Version: Paper 26.2".
+     * Conversely Velocity's "4.2.1-SNAPSHOT" - which *does* look like a
+     * pre-release by name - has a STABLE build and is exactly what
+     * papermc.io/downloads/velocity itself presents as the current download.
+     * So this ignores version names entirely and walks versions newest first,
+     * accepting the first one whose builds actually include a STABLE one.
+     *
+     * @return array{version: string, build: array{id: int, channel: string, downloads: array<string, array{name: string, url: string}>}}|null
      */
-    private function resolveLatestVersion(string $project): ?string
+    private function resolveLatestStable(string $project): ?array
     {
+        $checked = 0;
+
         foreach ($this->fetchVersionGroups($project) as $group) {
             if (!is_array($group)) {
                 continue;
             }
 
             foreach ($group as $version) {
-                if (is_string($version) && $this->looksLikeStableVersion($version)) {
-                    return $version;
+                if (!is_string($version)) {
+                    continue;
+                }
+
+                // Bounded so a long run of alpha/experimental versions (e.g. a
+                // whole new major line still early in development) can't turn
+                // a single "latest" resolution into an unbounded chain of API
+                // calls.
+                if (++$checked > self::MAX_LATEST_VERSION_CANDIDATES) {
+                    return null;
+                }
+
+                $build = $this->pickStableBuild($this->fetchBuilds($project, $version));
+                if ($build !== null) {
+                    return ['version' => $version, 'build' => $build];
                 }
             }
         }
 
         return null;
-    }
-
-    private function looksLikeStableVersion(string $version): bool
-    {
-        return preg_match('/-(snapshot|rc|pre|alpha|beta)/i', $version) !== 1;
     }
 
     private function versionExists(string $project, ?string $version): bool
@@ -407,16 +419,54 @@ class PaperVelocityUpdateService
         return false;
     }
 
-    /** @return array{id: int, channel: string, downloads: array<string, array{name: string, url: string}>}|null */
-    private function resolveLatestBuild(string $project, string $version): ?array
+    /**
+     * Resolves the build to use for a version the admin explicitly pinned.
+     * Unlike resolveLatestStable(), this falls back to the newest build of
+     * any channel if the pinned version genuinely has no STABLE build yet -
+     * the admin asked for this exact version, so it's better to give them the
+     * best available build for it than nothing at all.
+     *
+     * @return array{id: int, channel: string, downloads: array<string, array{name: string, url: string}>}|null
+     */
+    private function resolveBuildForPinnedVersion(string $project, string $version): ?array
     {
-        // cache()->remember() can't distinguish "cached null" from "cache miss"
-        // (it checks the value with is_null()), so a closure returning null on
-        // failure would never actually be cached - every restart during a
-        // PaperMC outage would re-hit the API instead of reusing a cached
-        // failure. false is used as the "nothing found" sentinel instead, since
-        // that a remember() call can actually cache.
-        $build = cache()->remember(
+        $builds = $this->fetchBuilds($project, $version);
+
+        return $this->pickStableBuild($builds) ?? $this->pickAnyBuild($builds);
+    }
+
+    /** @param  array<int, mixed>  $builds */
+    private function pickStableBuild(array $builds): ?array
+    {
+        foreach ($builds as $build) {
+            if (is_array($build) && ($build['channel'] ?? null) === 'STABLE' && isset($build['id'])) {
+                return $build;
+            }
+        }
+
+        return null;
+    }
+
+    /** @param  array<int, mixed>  $builds */
+    private function pickAnyBuild(array $builds): ?array
+    {
+        $candidate = $builds[0] ?? null;
+
+        return is_array($candidate) && isset($candidate['id']) ? $candidate : null;
+    }
+
+    /**
+     * Raw, cached build list for a single version. An empty array is used as
+     * the "nothing/failed" sentinel (not null/false): cache()->remember()
+     * can't distinguish a cached null from a cache miss, but an empty array
+     * is unambiguous, so a failure still actually gets cached instead of
+     * re-hitting PaperMC's API on every single restart during an outage.
+     *
+     * @return array<int, mixed>
+     */
+    private function fetchBuilds(string $project, string $version): array
+    {
+        $builds = cache()->remember(
             "paper-velocity-updater:build:$project:$version",
             now()->addMinutes($this->cacheMinutes()),
             function () use ($project, $version) {
@@ -425,27 +475,14 @@ class PaperVelocityUpdateService
                 } catch (Exception $exception) {
                     $this->reportOncePerWindow("build:$project:$version", $exception);
 
-                    return false;
+                    return [];
                 }
 
-                if (!is_array($builds) || empty($builds)) {
-                    return false;
-                }
-
-                // The API returns builds newest first; prefer a stable one but fall
-                // back to the newest build of any channel (e.g. version-only-in-beta).
-                $stable = array_values(array_filter($builds, fn ($build) => is_array($build) && ($build['channel'] ?? null) === 'STABLE'));
-                $candidate = $stable[0] ?? $builds[0];
-
-                if (!is_array($candidate) || !isset($candidate['id'])) {
-                    return false;
-                }
-
-                return $candidate;
+                return is_array($builds) ? $builds : [];
             }
         );
 
-        return is_array($build) ? $build : null;
+        return is_array($builds) ? $builds : [];
     }
 
     private function cacheMinutes(): int

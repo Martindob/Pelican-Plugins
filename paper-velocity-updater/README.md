@@ -34,11 +34,17 @@ other server (no matching variables at all) is left completely untouched, with n
    version list (typo, or PaperMC/the cache being temporarily unavailable), the update is skipped
    for that cycle rather than falling back to the latest version - a pinned server can only ever
    move to a version you explicitly asked for. Only leaving the variable at `latest` (or empty)
-   resolves to the newest version - and "newest" specifically means the newest *release*:
-   PaperMC's own version lists can put an in-development snapshot/pre-release ahead of the actual
-   latest release (verified live against Velocity's version list, where `4.2.1-SNAPSHOT` is listed
-   before `4.2.0`, and PaperMC labels that snapshot's own build `STABLE` too), so anything that
-   looks like a snapshot/rc/pre/alpha/beta version is skipped when resolving `latest`.
+   resolves to the newest version - which is resolved by actual build availability, not by version
+   *name*: names alone don't reliably say what's current. Verified live against the Fill API,
+   Paper's own `26.3` is a perfectly clean version string with no snapshot/rc/pre suffix, yet every
+   one of its builds is currently channel `ALPHA`, while every `26.2` build is `STABLE` - matching
+   [papermc.io/downloads/paper](https://papermc.io/downloads/paper)'s own "Latest Stable Version:
+   Paper 26.2". Conversely Velocity's `4.2.1-SNAPSHOT` - which *does* look like a pre-release by
+   name - has a `STABLE` build and is exactly what
+   [papermc.io/downloads/velocity](https://papermc.io/downloads/velocity) itself presents as the
+   current download. So `latest` walks versions newest-first and picks the first one that actually
+   has a `STABLE` build, checking up to 10 versions before giving up - matching what PaperMC's own
+   downloads pages show for both projects, not a naming guess.
 4. If that build differs from the one last installed (tracked in a small `.paper-velocity-updater.json`
    marker file in the server's root), the jar is downloaded straight into the server directory
    (via the daemon's file-pull API, with a generous timeout - see below) and the marker is
@@ -116,3 +122,12 @@ Only an actual pending update (or that periodic re-verification) touches the dae
   error instead of a broken page - the server keeps its previous state either way, just retry.
 - This plugin only hooks `start`/`restart` power actions - a reinstall runs the egg's own install
   script as usual, unaffected by this plugin.
+
+> [!NOTE]
+> PaperMC's own [downloads service documentation](https://docs.papermc.io/misc/downloads-service/)
+> states: *"We emphatically do not recommend using unstable builds or auto-updaters within
+> production environments."* This plugin only ever installs `STABLE`-channel builds and resolves
+> "latest" using the exact algorithm PaperMC's own docs describe (walk versions newest-first until
+> one with a stable build is found), but it *is* an auto-updater running against production
+> servers. Use the version lock (pin `MINECRAFT_VERSION`/`VELOCITY_VERSION`) if you want updates
+> confined to a version you've already tested, rather than leaving servers on `latest`.
